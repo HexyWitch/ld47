@@ -16,8 +16,12 @@ pub struct Game {
     vertex_buffer: gl::VertexBuffer,
     images: Images,
 
+    tick: usize,
+    rewind: bool,
     controls: Controls,
+
     player: Ghost,
+    old_players: Vec<Ghost>,
 }
 
 impl Game {
@@ -65,6 +69,12 @@ impl Game {
                                 ty: gl::VertexAttributeType::Float,
                                 size: 2,
                                 offset: 2 * 4,
+                            },
+                            gl::VertexAttribute {
+                                name: "a_color",
+                                ty: gl::VertexAttributeType::Float,
+                                size: 4,
+                                offset: 4 * 4,
                             },
                         ],
                     },
@@ -117,14 +127,18 @@ impl Game {
             }
         };
 
-        let player = Ghost::new(images.ghost, point2(50., 50.));
+        let player = Ghost::new(images.ghost, PLAYER_START);
         Self {
             program,
             vertex_buffer,
             images,
 
+            tick: 0,
+            rewind: false,
             controls: Controls::default(),
+
             player,
+            old_players: Vec::new(),
         }
     }
 
@@ -159,29 +173,47 @@ impl Game {
             }
         }
 
-        let mut dir: Vector2D<f32> = vec2(0., 0.);
-        if self.controls.up {
-            dir.y += 1.;
-        }
-        if self.controls.down {
-            dir.y -= 1.;
-        }
-        if self.controls.right {
-            dir.x += 1.;
-        }
-        if self.controls.left {
-            dir.x -= 1.;
-        }
-        if dir.length() > 0. {
-            self.player.position += dir.normalize() * 100. * TICK_DT;
-        }
+        // only current player gets new inputs
+        if self.rewind {
+            self.tick = self.tick.saturating_sub(5);
 
-        self.player.update();
+            if self.tick == 0 {
+                self.rewind = false;
+
+                // move current player into old players list, and create a new player
+                let mut old_player = std::mem::replace(
+                    &mut self.player,
+                    Ghost::new(self.images.ghost, PLAYER_START),
+                );
+                old_player.set_color([1.0, 1.0, 1.0, 0.5]);
+                self.old_players.push(old_player);
+
+                for old_player in self.old_players.iter_mut() {
+                    old_player.reset(PLAYER_START);
+                }
+            }
+        } else {
+            self.player.push_controls(self.controls);
+
+            // all players are updated
+            self.player.update(self.tick);
+            for old_player in self.old_players.iter_mut() {
+                old_player.update(self.tick);
+            }
+
+            self.tick += 1;
+            if self.tick >= LOOP_TICKS {
+                self.rewind = true;
+            }
+        }
     }
 
     pub fn draw(&mut self, context: &mut gl::Context) {
         let mut vertices = Vec::new();
-        self.player.draw(&mut vertices);
+        for old_player in self.old_players.iter() {
+            old_player.draw(self.tick, &mut vertices);
+        }
+        self.player.draw(self.tick, &mut vertices);
 
         unsafe {
             context.clear([212. / 255., 179. / 255., 112. / 255., 1.]);
@@ -196,7 +228,7 @@ struct Images {
     ghost: TextureRect,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 struct Controls {
     up: bool,
     left: bool,
@@ -206,7 +238,8 @@ struct Controls {
 
 struct Ghost {
     sprite: Sprite,
-    position: Point2D<f32>,
+    controls: Vec<Controls>,
+    positions: Vec<Point2D<f32>>,
     animation_timer: f32,
 }
 
@@ -214,21 +247,73 @@ impl Ghost {
     pub fn new(image: TextureRect, position: Point2D<f32>) -> Self {
         Self {
             sprite: Sprite::new(image, GHOST_ANIMATION_FRAMES, point2(3., 2.)),
-            position,
+            controls: Vec::new(),
+            positions: vec![position],
             animation_timer: 0.,
         }
     }
 
-    pub fn update(&mut self) {
+    pub fn reset(&mut self, position: Point2D<f32>) {
+        self.positions = vec![position];
+        self.animation_timer = 0.;
+    }
+
+    pub fn push_controls(&mut self, controls: Controls) {
+        self.controls.push(controls);
+    }
+
+    pub fn update(&mut self, tick: usize) {
+        if let Some(controls) = self.controls.get(tick) {
+            let mut dir: Vector2D<f32> = vec2(0., 0.);
+            if controls.up {
+                dir.y += 1.;
+            }
+            if controls.down {
+                dir.y -= 1.;
+            }
+            if controls.right {
+                dir.x += 1.;
+            }
+            if controls.left {
+                dir.x -= 1.;
+            }
+
+            if dir.length() > 0. {
+                self.positions.push(
+                    *self.positions.last().expect("position vec is empty")
+                        + dir.normalize() * GHOST_SPEED * TICK_DT,
+                );
+            }
+        }
+
         self.animation_timer = (self.animation_timer + TICK_DT) % GHOST_ANIMATION_TIME;
     }
 
-    pub fn draw(&self, out: &mut Vec<Vertex>) {
+    pub fn draw(&self, tick: usize, out: &mut Vec<Vertex>) {
         let frame = (self.animation_timer / GHOST_ANIMATION_TIME * GHOST_ANIMATION_FRAMES as f32)
             .floor() as usize;
-        render_sprite(&self.sprite, frame, self.position, out);
+        let position = *self
+            .positions
+            .get(tick + 1)
+            .unwrap_or(self.positions.last().expect("positions vec is empty"));
+        render_sprite(&self.sprite, frame, position, out);
+    }
+
+    pub fn set_color(&mut self, color: [f32; 4]) {
+        self.sprite.set_color(color);
     }
 }
+
+// Time loops over 300 ticks, 5 seconds
+const LOOP_TICKS: usize = 300;
+
+const PLAYER_START: Point2D<f32> = Point2D {
+    x: 320.,
+    y: 180.,
+    _unit: std::marker::PhantomData,
+};
+
+const GHOST_SPEED: f32 = 50.;
 
 const GHOST_ANIMATION_FRAMES: u32 = 6;
 const GHOST_ANIMATION_TIME: f32 = 0.5;

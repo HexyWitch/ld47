@@ -15,6 +15,7 @@ use crate::{
 pub struct Vertex {
     position: [f32; 2],
     uv: [f32; 2],
+    color: [f32; 4],
 }
 
 #[derive(Clone)]
@@ -23,6 +24,7 @@ pub struct Sprite {
     frame_count: u32,
     origin: Point2D<f32>,
     transform: Transform2D<f32>,
+    color: [f32; 4],
 }
 
 impl Sprite {
@@ -44,12 +46,17 @@ impl Sprite {
             frame_count,
             origin,
             transform: Transform2D::create_translation(-origin.x, -origin.y),
+            color: [1., 1., 1., 1.],
         }
     }
 
     pub fn set_transform(&mut self, t: Transform2D<f32>) {
         self.transform =
             Transform2D::create_translation(-self.origin.x, -self.origin.y).post_transform(&t);
+    }
+
+    pub fn set_color(&mut self, color: [f32; 4]) {
+        self.color = color;
     }
 
     pub fn transform(&self) -> &Transform2D<f32> {
@@ -124,26 +131,32 @@ pub fn render_sprite(sprite: &Sprite, frame: usize, position: Point2D<f32>, out:
         Vertex {
             position: transform(vertex_rect.min()),
             uv: [uv_rect.min_x(), uv_rect.max_y()],
+            color: sprite.color,
         },
         Vertex {
             position: transform(point2(vertex_rect.max_x(), vertex_rect.min_y())),
             uv: [uv_rect.max_x(), uv_rect.max_y()],
+            color: sprite.color,
         },
         Vertex {
             position: transform(point2(vertex_rect.min_x(), vertex_rect.max_y())),
             uv: [uv_rect.min_x(), uv_rect.min_y()],
+            color: sprite.color,
         },
         Vertex {
             position: transform(point2(vertex_rect.max_x(), vertex_rect.min_y())),
             uv: [uv_rect.max_x(), uv_rect.max_y()],
+            color: sprite.color,
         },
         Vertex {
             position: transform(vertex_rect.max()),
             uv: [uv_rect.max_x(), uv_rect.min_y()],
+            color: sprite.color,
         },
         Vertex {
             position: transform(point2(vertex_rect.min_x(), vertex_rect.max_y())),
             uv: [uv_rect.min_x(), uv_rect.min_y()],
+            color: sprite.color,
         },
     ]);
 }
@@ -169,26 +182,32 @@ pub fn render_quad(position: Point2D<f32>, tex_coords: TextureRect, out: &mut Ve
         Vertex {
             position: vertex_rect.min().to_array(),
             uv: [uv_rect.min_x(), uv_rect.max_y()],
+            color: [1., 1., 1., 1.],
         },
         Vertex {
             position: [vertex_rect.max_x(), vertex_rect.min_y()],
             uv: [uv_rect.max_x(), uv_rect.max_y()],
+            color: [1., 1., 1., 1.],
         },
         Vertex {
             position: [vertex_rect.min_x(), vertex_rect.max_y()],
             uv: [uv_rect.min_x(), uv_rect.min_y()],
+            color: [1., 1., 1., 1.],
         },
         Vertex {
             position: [vertex_rect.max_x(), vertex_rect.min_y()],
             uv: [uv_rect.max_x(), uv_rect.max_y()],
+            color: [1., 1., 1., 1.],
         },
         Vertex {
             position: vertex_rect.max().to_array(),
             uv: [uv_rect.max_x(), uv_rect.min_y()],
+            color: [1., 1., 1., 1.],
         },
         Vertex {
             position: [vertex_rect.min_x(), vertex_rect.max_y()],
             uv: [uv_rect.min_x(), uv_rect.min_y()],
+            color: [1., 1., 1., 1.],
         },
     ]);
 }
