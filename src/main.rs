@@ -4,6 +4,7 @@ mod game;
 mod gl;
 mod graphics;
 mod input;
+mod level;
 mod mixer;
 mod platform;
 mod texture_atlas;

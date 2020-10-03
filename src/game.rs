@@ -1,6 +1,8 @@
+use std::collections::{HashMap, HashSet};
+
 use euclid::{
-    default::{Box2D, Point2D, Rect, Size2D, Transform2D, Vector2D},
-    point2, size2, vec2,
+    default::{Point2D, Transform2D, Vector2D},
+    point2, vec2,
 };
 
 use crate::{
@@ -8,6 +10,7 @@ use crate::{
     gl,
     graphics::{load_image, render_sprite, Sprite, Vertex, TEXTURE_ATLAS_SIZE},
     input::{InputEvent, Key},
+    level::{create_level, generate_tile_buffer, DoorTile, Level, Tile, TILE_SIZE},
     texture_atlas::{TextureAtlas, TextureRect},
 };
 
@@ -19,10 +22,13 @@ pub struct Game {
 
     tick: usize,
     rewind: bool,
+    level: Level,
     controls: Controls,
 
     player: Ghost,
     old_players: Vec<Ghost>,
+    buttons: HashMap<Point2D<i32>, Button>,
+    doors: HashMap<Point2D<i32>, Door>,
 }
 
 impl Game {
@@ -89,6 +95,7 @@ impl Game {
         )
         .post_scale(2., 2.)
         .post_scale(ZOOM_LEVEL, ZOOM_LEVEL)
+        .post_scale(TILE_SIZE as f32, TILE_SIZE as f32)
         .post_translate(vec2(-1.0, -1.0));
         program
             .set_uniform(
@@ -143,12 +150,57 @@ impl Game {
                     &mut texture,
                 )
                 .unwrap(),
+                door_h: load_image(
+                    include_bytes!("../assets/door.png"),
+                    &mut atlas,
+                    &mut texture,
+                )
+                .unwrap(),
+                door_v: load_image(
+                    include_bytes!("../assets/door_v.png"),
+                    &mut atlas,
+                    &mut texture,
+                )
+                .unwrap(),
+                button: load_image(
+                    include_bytes!("../assets/button.png"),
+                    &mut atlas,
+                    &mut texture,
+                )
+                .unwrap(),
             }
         };
 
-        let ground_buffer = generate_tile_buffer(images.ground, images.walls, gl_context);
+        let level = create_level();
+        let ground_buffer = generate_tile_buffer(&level, images.ground, images.walls, gl_context);
 
-        let player = Ghost::new(images.ghost, images.ghost_shadow, PLAYER_START);
+        let mut buttons = HashMap::new();
+        for (position, button_tile) in level.buttons.iter() {
+            buttons.insert(
+                *position,
+                Button::new(
+                    images.button,
+                    *position,
+                    button_tile.connection.expect("unconnected button"),
+                ),
+            );
+        }
+
+        let mut doors = HashMap::new();
+        for (position, door_tile) in level.doors.iter() {
+            doors.insert(
+                *position,
+                Door::new(
+                    match door_tile {
+                        &DoorTile::Horizontal => images.door_h,
+                        &DoorTile::Vertical => images.door_v,
+                    },
+                    *position,
+                ),
+            );
+        }
+
+        let player = Ghost::new(images.ghost, images.ghost_shadow, level.player_start);
         Self {
             program,
             ground_buffer,
@@ -157,10 +209,13 @@ impl Game {
 
             tick: 0,
             rewind: false,
+            level,
             controls: Controls::default(),
 
             player,
             old_players: Vec::new(),
+            buttons,
+            doors,
         }
     }
 
@@ -205,22 +260,41 @@ impl Game {
                 // move current player into old players list, and create a new player
                 let mut old_player = std::mem::replace(
                     &mut self.player,
-                    Ghost::new(self.images.ghost, self.images.ghost_shadow, PLAYER_START),
+                    Ghost::new(
+                        self.images.ghost,
+                        self.images.ghost_shadow,
+                        self.level.player_start,
+                    ),
                 );
                 old_player.set_color([1.0, 1.0, 1.0, 0.5]);
                 self.old_players.push(old_player);
 
                 for old_player in self.old_players.iter_mut() {
-                    old_player.reset(PLAYER_START);
+                    old_player.reset(self.level.player_start);
                 }
             }
         } else {
             self.player.push_controls(self.controls);
 
             // all players are updated
-            self.player.update(self.tick);
+            self.player.update(self.tick, &self.level, &self.doors);
             for old_player in self.old_players.iter_mut() {
-                old_player.update(self.tick);
+                old_player.update(self.tick, &self.level, &self.doors);
+            }
+
+            let mut players_spatial: HashSet<Point2D<i32>> = HashSet::new();
+            players_spatial.insert(point2(
+                self.player.position(self.tick).x.floor() as i32,
+                self.player.position(self.tick).y.floor() as i32,
+            ));
+            for old_player in self.old_players.iter() {
+                players_spatial.insert(point2(
+                    old_player.position(self.tick).x.floor() as i32,
+                    old_player.position(self.tick).y.floor() as i32,
+                ));
+            }
+            for button in self.buttons.values_mut() {
+                button.update(&players_spatial, &mut self.doors);
             }
 
             self.tick += 1;
@@ -232,6 +306,13 @@ impl Game {
 
     pub fn draw(&mut self, context: &mut gl::Context) {
         let mut vertices = Vec::new();
+
+        for button in self.buttons.values() {
+            button.draw(&mut vertices);
+        }
+        for door in self.doors.values() {
+            door.draw(&mut vertices);
+        }
 
         // draw all shadows first
         for old_player in self.old_players.iter() {
@@ -261,6 +342,9 @@ struct Images {
     ghost_shadow: TextureRect,
     ground: TextureRect,
     walls: TextureRect,
+    door_h: TextureRect,
+    door_v: TextureRect,
+    button: TextureRect,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -281,9 +365,16 @@ struct Ghost {
 
 impl Ghost {
     pub fn new(image: TextureRect, shadow: TextureRect, position: Point2D<f32>) -> Self {
+        let mut sprite = Sprite::new(image, GHOST_ANIMATION_FRAMES, point2(6., -4.0));
+        let mut shadow = Sprite::new(shadow, 1, point2(6., 3.));
+
+        let transform = Transform2D::create_scale(1. / TILE_SIZE as f32, 1. / TILE_SIZE as f32);
+        sprite.set_transform(transform);
+        shadow.set_transform(transform);
+
         Self {
-            sprite: Sprite::new(image, GHOST_ANIMATION_FRAMES, point2(6., -4.0)),
-            shadow: Sprite::new(shadow, 1, point2(6., 3.)),
+            sprite,
+            shadow,
             controls: Vec::new(),
             positions: vec![position],
             animation_timer: 0.,
@@ -299,7 +390,14 @@ impl Ghost {
         self.controls.push(controls);
     }
 
-    pub fn update(&mut self, tick: usize) {
+    pub fn position(&self, tick: usize) -> Point2D<f32> {
+        *self
+            .positions
+            .get(tick + 1)
+            .unwrap_or(self.positions.last().expect("positions vec is empty"))
+    }
+
+    pub fn update(&mut self, tick: usize, level: &Level, doors: &HashMap<Point2D<i32>, Door>) {
         if let Some(controls) = self.controls.get(tick) {
             let mut dir: Vector2D<f32> = vec2(0., 0.);
             if controls.up {
@@ -316,10 +414,29 @@ impl Ghost {
             }
 
             if dir.length() > 0. {
-                self.positions.push(
-                    *self.positions.last().expect("position vec is empty")
-                        + dir.normalize() * GHOST_SPEED * TICK_DT,
-                );
+                // This is the laziest collision detection and resolution in the history of video gam
+                let new_pos = *self.positions.last().expect("position vec is empty")
+                    + dir.normalize() * GHOST_SPEED * TICK_DT;
+
+                let mut colliding = false;
+                let new_pos_tile = point2(new_pos.x.floor() as i32, new_pos.y.floor() as i32);
+                if level.tile(new_pos_tile.x, new_pos_tile.y) == Tile::Wall {
+                    colliding = true;
+                }
+                if doors
+                    .get(&new_pos_tile)
+                    .map(|door| !door.is_open())
+                    .unwrap_or(false)
+                {
+                    colliding = true;
+                }
+
+                if !colliding {
+                    self.positions.push(new_pos);
+                } else {
+                    self.positions
+                        .push(*self.positions.last().expect("position vec is empty"));
+                }
             }
         }
 
@@ -349,240 +466,86 @@ impl Ghost {
     }
 }
 
-const LEVEL_HEIGHT: usize = 22;
-const LEVEL: [&'static str; LEVEL_HEIGHT] = [
-    "########################################",
-    "#                                      #",
-    "#                                      #",
-    "#                                      #",
-    "#                                      #",
-    "#                                      #",
-    "#                                      #",
-    "#                                      #",
-    "#                                      #",
-    "#        ##########                    #",
-    "#        ##########                    #",
-    "#        ##########                    #",
-    "#                                      #",
-    "#                                      #",
-    "#                                      #",
-    "#                                      #",
-    "#                                      #",
-    "#                                      #",
-    "#                                      #",
-    "#                                      #",
-    "#                                      #",
-    "########################################",
-];
+struct Button {
+    sprite: Sprite,
+    position: Point2D<i32>,
+    connection: Point2D<i32>,
+    active: bool,
+}
 
-const TILE_SIZE: u32 = 16;
-
-pub fn generate_tile_buffer(
-    floor: TextureRect,
-    walls: TextureRect,
-    context: &mut gl::Context,
-) -> gl::VertexBuffer {
-    let tile_size = Size2D::new((floor[2] - floor[0]) as f32, (floor[3] - floor[1]) as f32);
-    let mut vertices = Vec::new();
-
-    for y_tile in 0..LEVEL_HEIGHT {
-        for x_tile in 0..LEVEL[y_tile].len() {
-            let tile = match LEVEL[y_tile].chars().nth(x_tile) {
-                Some(' ') => floor,
-                Some('#') => {
-                    let wall_at = |x: i32, y: i32| -> bool {
-                        let x = x_tile as i32 + x;
-                        let y = y_tile as i32 + y;
-                        if x >= 0 && y >= 0 && y < LEVEL_HEIGHT as i32 {
-                            LEVEL[y as usize].chars().nth(x as usize) == Some('#')
-                        } else {
-                            true
-                        }
-                    };
-                    // all different kinds of wall tiles
-                    let tl = wall_at(-1, -1);
-                    let t = wall_at(0, -1);
-                    let tr = wall_at(1, -1);
-                    let l = wall_at(-1, 0);
-                    let r = wall_at(1, 0);
-                    let bl = wall_at(-1, 1);
-                    let b = wall_at(0, 1);
-                    let br = wall_at(1, 1);
-
-                    if t && r && !tr {
-                        [
-                            walls[0] + 0 * TILE_SIZE,
-                            walls[1] + 2 * TILE_SIZE,
-                            walls[0] + 1 * TILE_SIZE,
-                            walls[1] + 3 * TILE_SIZE,
-                        ]
-                    } else if t && l && !tl {
-                        [
-                            walls[0] + 2 * TILE_SIZE,
-                            walls[1] + 2 * TILE_SIZE,
-                            walls[0] + 3 * TILE_SIZE,
-                            walls[1] + 3 * TILE_SIZE,
-                        ]
-                    } else if b && r && !br {
-                        [
-                            walls[0] + 0 * TILE_SIZE,
-                            walls[1] + 0 * TILE_SIZE,
-                            walls[0] + 1 * TILE_SIZE,
-                            walls[1] + 1 * TILE_SIZE,
-                        ]
-                    } else if b && l && !bl {
-                        [
-                            walls[0] + 2 * TILE_SIZE,
-                            walls[1] + 0 * TILE_SIZE,
-                            walls[0] + 3 * TILE_SIZE,
-                            walls[1] + 1 * TILE_SIZE,
-                        ]
-                    } else if !t && !l {
-                        [
-                            walls[0] + 3 * TILE_SIZE,
-                            walls[1] + 0 * TILE_SIZE,
-                            walls[0] + 4 * TILE_SIZE,
-                            walls[1] + 1 * TILE_SIZE,
-                        ]
-                    } else if !t && !r {
-                        [
-                            walls[0] + 4 * TILE_SIZE,
-                            walls[1] + 0 * TILE_SIZE,
-                            walls[0] + 5 * TILE_SIZE,
-                            walls[1] + 1 * TILE_SIZE,
-                        ]
-                    } else if !t {
-                        [
-                            walls[0] + 1 * TILE_SIZE,
-                            walls[1] + 2 * TILE_SIZE,
-                            walls[0] + 2 * TILE_SIZE,
-                            walls[1] + 3 * TILE_SIZE,
-                        ]
-                    } else if !b && !l {
-                        [
-                            walls[0] + 3 * TILE_SIZE,
-                            walls[1] + 1 * TILE_SIZE,
-                            walls[0] + 4 * TILE_SIZE,
-                            walls[1] + 2 * TILE_SIZE,
-                        ]
-                    } else if !b && !r {
-                        [
-                            walls[0] + 4 * TILE_SIZE,
-                            walls[1] + 1 * TILE_SIZE,
-                            walls[0] + 5 * TILE_SIZE,
-                            walls[1] + 2 * TILE_SIZE,
-                        ]
-                    } else if !b {
-                        [
-                            walls[0] + 1 * TILE_SIZE,
-                            walls[1] + 0 * TILE_SIZE,
-                            walls[0] + 2 * TILE_SIZE,
-                            walls[1] + 1 * TILE_SIZE,
-                        ]
-                    } else if !l {
-                        [
-                            walls[0] + 2 * TILE_SIZE,
-                            walls[1] + 1 * TILE_SIZE,
-                            walls[0] + 3 * TILE_SIZE,
-                            walls[1] + 2 * TILE_SIZE,
-                        ]
-                    } else if !r {
-                        [
-                            walls[0] + 0 * TILE_SIZE,
-                            walls[1] + 1 * TILE_SIZE,
-                            walls[0] + 1 * TILE_SIZE,
-                            walls[1] + 2 * TILE_SIZE,
-                        ]
-                    } else {
-                        [
-                            walls[0] + 1 * TILE_SIZE,
-                            walls[1] + 1 * TILE_SIZE,
-                            walls[0] + 2 * TILE_SIZE,
-                            walls[1] + 2 * TILE_SIZE,
-                        ]
-                    }
-                }
-                Some(c) => {
-                    panic!("unknown tile type {}", c);
-                }
-                None => {
-                    continue;
-                }
-            };
-
-            let y_tile = LEVEL_HEIGHT - 1 - y_tile;
-            let tile_rect = Box2D::new(
-                point2(
-                    x_tile as f32 * tile_size.width,
-                    y_tile as f32 * tile_size.height,
-                ),
-                point2(
-                    (x_tile + 1) as f32 * tile_size.width,
-                    (y_tile + 1) as f32 * tile_size.height,
-                ),
-            );
-            let uv_pos = point2(
-                tile[0] as f32 / TEXTURE_ATLAS_SIZE.width as f32,
-                tile[1] as f32 / TEXTURE_ATLAS_SIZE.height as f32,
-            );
-            let uv_size = size2(
-                (tile[2] - tile[0]) as f32 / TEXTURE_ATLAS_SIZE.width as f32,
-                (tile[3] - tile[1]) as f32 / TEXTURE_ATLAS_SIZE.height as f32,
-            );
-            let uv_rect = Rect::new(uv_pos, uv_size);
-
-            vertices.extend_from_slice(&[
-                Vertex {
-                    position: tile_rect.min.to_array(),
-                    uv: [uv_rect.min_x(), uv_rect.max_y()],
-                    color: [1., 1., 1., 1.],
-                },
-                Vertex {
-                    position: [tile_rect.max.x, tile_rect.min.y],
-                    uv: [uv_rect.max_x(), uv_rect.max_y()],
-                    color: [1., 1., 1., 1.],
-                },
-                Vertex {
-                    position: [tile_rect.min.x, tile_rect.max.y],
-                    uv: [uv_rect.min_x(), uv_rect.min_y()],
-                    color: [1., 1., 1., 1.],
-                },
-                Vertex {
-                    position: [tile_rect.max.x, tile_rect.min.y],
-                    uv: [uv_rect.max_x(), uv_rect.max_y()],
-                    color: [1., 1., 1., 1.],
-                },
-                Vertex {
-                    position: tile_rect.max.to_array(),
-                    uv: [uv_rect.max_x(), uv_rect.min_y()],
-                    color: [1., 1., 1., 1.],
-                },
-                Vertex {
-                    position: [tile_rect.min.x, tile_rect.max.y],
-                    uv: [uv_rect.min_x(), uv_rect.min_y()],
-                    color: [1., 1., 1., 1.],
-                },
-            ]);
+impl Button {
+    pub fn new(image: TextureRect, position: Point2D<i32>, connection: Point2D<i32>) -> Self {
+        let mut sprite = Sprite::new(image, 2, point2(0., 0.));
+        let transform = Transform2D::create_scale(1. / TILE_SIZE as f32, 1. / TILE_SIZE as f32);
+        sprite.set_transform(transform);
+        Self {
+            sprite,
+            position,
+            connection,
+            active: false,
         }
     }
 
-    unsafe {
-        let mut vertex_buffer = context.create_vertex_buffer().unwrap();
-        vertex_buffer.write(&vertices);
-        vertex_buffer
+    pub fn update(
+        &mut self,
+        players_spatial: &HashSet<Point2D<i32>>,
+        doors: &mut HashMap<Point2D<i32>, Door>,
+    ) {
+        if players_spatial.contains(&self.position) {
+            self.active = true;
+            doors.get_mut(&self.connection).unwrap().open = true;
+        } else {
+            self.active = false;
+            doors.get_mut(&self.connection).unwrap().open = false;
+        }
+    }
+
+    pub fn draw(&self, out: &mut Vec<Vertex>) {
+        render_sprite(
+            &self.sprite,
+            if self.active { 1 } else { 0 },
+            self.position.to_f32(),
+            out,
+        );
+    }
+}
+
+struct Door {
+    sprite: Sprite,
+    position: Point2D<i32>,
+    open: bool,
+}
+
+impl Door {
+    pub fn new(image: TextureRect, position: Point2D<i32>) -> Self {
+        let mut sprite = Sprite::new(image, 2, point2(0., 0.));
+        let transform = Transform2D::create_scale(1. / TILE_SIZE as f32, 1. / TILE_SIZE as f32);
+        sprite.set_transform(transform);
+        Self {
+            sprite,
+            position,
+            open: false,
+        }
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+
+    pub fn draw(&self, out: &mut Vec<Vertex>) {
+        render_sprite(
+            &self.sprite,
+            if self.open { 1 } else { 0 },
+            self.position.to_f32(),
+            out,
+        );
     }
 }
 
 // Time loops over 300 ticks, 5 seconds
 const LOOP_TICKS: usize = 300;
 
-const PLAYER_START: Point2D<f32> = Point2D {
-    x: 320.,
-    y: 180.,
-    _unit: std::marker::PhantomData,
-};
-
-const GHOST_SPEED: f32 = 50.;
+const GHOST_SPEED: f32 = 5.;
 
 const GHOST_ANIMATION_FRAMES: u32 = 6;
 const GHOST_ANIMATION_TIME: f32 = 0.5;
