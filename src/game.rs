@@ -1,6 +1,6 @@
 use euclid::{
-    default::{Point2D, Size2D, Transform2D, Vector2D},
-    point2, vec2,
+    default::{Box2D, Point2D, Rect, Size2D, Transform2D, Vector2D},
+    point2, size2, vec2,
 };
 
 use crate::{
@@ -13,6 +13,7 @@ use crate::{
 
 pub struct Game {
     program: gl::Program,
+    ground_buffer: gl::VertexBuffer,
     vertex_buffer: gl::VertexBuffer,
     images: Images,
 
@@ -124,12 +125,27 @@ impl Game {
                     &mut texture,
                 )
                 .unwrap(),
+                ghost_shadow: load_image(
+                    include_bytes!("../assets/ghost_shadow.png"),
+                    &mut atlas,
+                    &mut texture,
+                )
+                .unwrap(),
+                ground: load_image(
+                    include_bytes!("../assets/ground.png"),
+                    &mut atlas,
+                    &mut texture,
+                )
+                .unwrap(),
             }
         };
 
-        let player = Ghost::new(images.ghost, PLAYER_START);
+        let ground_buffer = generate_ground(64, 32, images.ground, gl_context);
+
+        let player = Ghost::new(images.ghost, images.ghost_shadow, PLAYER_START);
         Self {
             program,
+            ground_buffer,
             vertex_buffer,
             images,
 
@@ -183,7 +199,7 @@ impl Game {
                 // move current player into old players list, and create a new player
                 let mut old_player = std::mem::replace(
                     &mut self.player,
-                    Ghost::new(self.images.ghost, PLAYER_START),
+                    Ghost::new(self.images.ghost, self.images.ghost_shadow, PLAYER_START),
                 );
                 old_player.set_color([1.0, 1.0, 1.0, 0.5]);
                 self.old_players.push(old_player);
@@ -210,15 +226,24 @@ impl Game {
 
     pub fn draw(&mut self, context: &mut gl::Context) {
         let mut vertices = Vec::new();
+
+        // draw all shadows first
+        for old_player in self.old_players.iter() {
+            old_player.draw_shadow(self.tick, &mut vertices);
+        }
+        self.player.draw_shadow(self.tick, &mut vertices);
+
+        // then players
         for old_player in self.old_players.iter() {
             old_player.draw(self.tick, &mut vertices);
         }
         self.player.draw(self.tick, &mut vertices);
 
         unsafe {
-            context.clear([212. / 255., 179. / 255., 112. / 255., 1.]);
-
             self.vertex_buffer.write(&vertices);
+
+            context.clear([212. / 255., 179. / 255., 112. / 255., 1.]);
+            self.program.render_vertices(&self.ground_buffer).unwrap();
             self.program.render_vertices(&self.vertex_buffer).unwrap();
         }
     }
@@ -226,6 +251,8 @@ impl Game {
 
 struct Images {
     ghost: TextureRect,
+    ghost_shadow: TextureRect,
+    ground: TextureRect,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -238,15 +265,17 @@ struct Controls {
 
 struct Ghost {
     sprite: Sprite,
+    shadow: Sprite,
     controls: Vec<Controls>,
     positions: Vec<Point2D<f32>>,
     animation_timer: f32,
 }
 
 impl Ghost {
-    pub fn new(image: TextureRect, position: Point2D<f32>) -> Self {
+    pub fn new(image: TextureRect, shadow: TextureRect, position: Point2D<f32>) -> Self {
         Self {
-            sprite: Sprite::new(image, GHOST_ANIMATION_FRAMES, point2(3., 2.)),
+            sprite: Sprite::new(image, GHOST_ANIMATION_FRAMES, point2(6., -4.0)),
+            shadow: Sprite::new(shadow, 1, point2(6., 3.)),
             controls: Vec::new(),
             positions: vec![position],
             animation_timer: 0.,
@@ -289,6 +318,14 @@ impl Ghost {
         self.animation_timer = (self.animation_timer + TICK_DT) % GHOST_ANIMATION_TIME;
     }
 
+    pub fn draw_shadow(&self, tick: usize, out: &mut Vec<Vertex>) {
+        let position = *self
+            .positions
+            .get(tick + 1)
+            .unwrap_or(self.positions.last().expect("positions vec is empty"));
+        render_sprite(&self.shadow, 0, position, out);
+    }
+
     pub fn draw(&self, tick: usize, out: &mut Vec<Vertex>) {
         let frame = (self.animation_timer / GHOST_ANIMATION_TIME * GHOST_ANIMATION_FRAMES as f32)
             .floor() as usize;
@@ -301,6 +338,78 @@ impl Ghost {
 
     pub fn set_color(&mut self, color: [f32; 4]) {
         self.sprite.set_color(color);
+    }
+}
+
+pub fn generate_ground(
+    width: u32,
+    height: u32,
+    image: TextureRect,
+    context: &mut gl::Context,
+) -> gl::VertexBuffer {
+    let tile_size = Size2D::new((image[2] - image[0]) as f32, (image[3] - image[1]) as f32);
+    let mut vertices = Vec::new();
+    for x_tile in 0..width {
+        for y_tile in 0..height {
+            let tile_rect = Box2D::new(
+                point2(
+                    x_tile as f32 * tile_size.width,
+                    y_tile as f32 * tile_size.height,
+                ),
+                point2(
+                    (x_tile + 1) as f32 * tile_size.width,
+                    (y_tile + 1) as f32 * tile_size.height,
+                ),
+            );
+            let uv_pos = point2(
+                image[0] as f32 / TEXTURE_ATLAS_SIZE.width as f32,
+                image[1] as f32 / TEXTURE_ATLAS_SIZE.height as f32,
+            );
+            let uv_size = size2(
+                (image[2] - image[0]) as f32 / TEXTURE_ATLAS_SIZE.width as f32,
+                (image[3] - image[1]) as f32 / TEXTURE_ATLAS_SIZE.height as f32,
+            );
+            let uv_rect = Rect::new(uv_pos, uv_size);
+
+            vertices.extend_from_slice(&[
+                Vertex {
+                    position: tile_rect.min.to_array(),
+                    uv: [uv_rect.min_x(), uv_rect.max_y()],
+                    color: [1., 1., 1., 1.],
+                },
+                Vertex {
+                    position: [tile_rect.max.x, tile_rect.min.y],
+                    uv: [uv_rect.max_x(), uv_rect.max_y()],
+                    color: [1., 1., 1., 1.],
+                },
+                Vertex {
+                    position: [tile_rect.min.x, tile_rect.max.y],
+                    uv: [uv_rect.min_x(), uv_rect.min_y()],
+                    color: [1., 1., 1., 1.],
+                },
+                Vertex {
+                    position: [tile_rect.max.x, tile_rect.min.y],
+                    uv: [uv_rect.max_x(), uv_rect.max_y()],
+                    color: [1., 1., 1., 1.],
+                },
+                Vertex {
+                    position: tile_rect.max.to_array(),
+                    uv: [uv_rect.max_x(), uv_rect.min_y()],
+                    color: [1., 1., 1., 1.],
+                },
+                Vertex {
+                    position: [tile_rect.min.x, tile_rect.max.y],
+                    uv: [uv_rect.min_x(), uv_rect.min_y()],
+                    color: [1., 1., 1., 1.],
+                },
+            ]);
+        }
+    }
+
+    unsafe {
+        let mut vertex_buffer = context.create_vertex_buffer().unwrap();
+        vertex_buffer.write(&vertices);
+        vertex_buffer
     }
 }
 
