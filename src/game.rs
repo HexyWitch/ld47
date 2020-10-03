@@ -137,10 +137,16 @@ impl Game {
                     &mut texture,
                 )
                 .unwrap(),
+                walls: load_image(
+                    include_bytes!("../assets/walls.png"),
+                    &mut atlas,
+                    &mut texture,
+                )
+                .unwrap(),
             }
         };
 
-        let ground_buffer = generate_ground(64, 32, images.ground, gl_context);
+        let ground_buffer = generate_tile_buffer(images.ground, images.walls, gl_context);
 
         let player = Ghost::new(images.ghost, images.ghost_shadow, PLAYER_START);
         Self {
@@ -242,7 +248,8 @@ impl Game {
         unsafe {
             self.vertex_buffer.write(&vertices);
 
-            context.clear([212. / 255., 179. / 255., 112. / 255., 1.]);
+            context.clear([0., 0., 0., 1.]);
+
             self.program.render_vertices(&self.ground_buffer).unwrap();
             self.program.render_vertices(&self.vertex_buffer).unwrap();
         }
@@ -253,6 +260,7 @@ struct Images {
     ghost: TextureRect,
     ghost_shadow: TextureRect,
     ground: TextureRect,
+    walls: TextureRect,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -341,16 +349,168 @@ impl Ghost {
     }
 }
 
-pub fn generate_ground(
-    width: u32,
-    height: u32,
-    image: TextureRect,
+const LEVEL_HEIGHT: usize = 22;
+const LEVEL: [&'static str; LEVEL_HEIGHT] = [
+    "########################################",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "#        ##########                    #",
+    "#        ##########                    #",
+    "#        ##########                    #",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "########################################",
+];
+
+const TILE_SIZE: u32 = 16;
+
+pub fn generate_tile_buffer(
+    floor: TextureRect,
+    walls: TextureRect,
     context: &mut gl::Context,
 ) -> gl::VertexBuffer {
-    let tile_size = Size2D::new((image[2] - image[0]) as f32, (image[3] - image[1]) as f32);
+    let tile_size = Size2D::new((floor[2] - floor[0]) as f32, (floor[3] - floor[1]) as f32);
     let mut vertices = Vec::new();
-    for x_tile in 0..width {
-        for y_tile in 0..height {
+
+    for y_tile in 0..LEVEL_HEIGHT {
+        for x_tile in 0..LEVEL[y_tile].len() {
+            let tile = match LEVEL[y_tile].chars().nth(x_tile) {
+                Some(' ') => floor,
+                Some('#') => {
+                    let wall_at = |x: i32, y: i32| -> bool {
+                        let x = x_tile as i32 + x;
+                        let y = y_tile as i32 + y;
+                        if x >= 0 && y >= 0 && y < LEVEL_HEIGHT as i32 {
+                            LEVEL[y as usize].chars().nth(x as usize) == Some('#')
+                        } else {
+                            true
+                        }
+                    };
+                    // all different kinds of wall tiles
+                    let tl = wall_at(-1, -1);
+                    let t = wall_at(0, -1);
+                    let tr = wall_at(1, -1);
+                    let l = wall_at(-1, 0);
+                    let r = wall_at(1, 0);
+                    let bl = wall_at(-1, 1);
+                    let b = wall_at(0, 1);
+                    let br = wall_at(1, 1);
+
+                    if t && r && !tr {
+                        [
+                            walls[0] + 0 * TILE_SIZE,
+                            walls[1] + 2 * TILE_SIZE,
+                            walls[0] + 1 * TILE_SIZE,
+                            walls[1] + 3 * TILE_SIZE,
+                        ]
+                    } else if t && l && !tl {
+                        [
+                            walls[0] + 2 * TILE_SIZE,
+                            walls[1] + 2 * TILE_SIZE,
+                            walls[0] + 3 * TILE_SIZE,
+                            walls[1] + 3 * TILE_SIZE,
+                        ]
+                    } else if b && r && !br {
+                        [
+                            walls[0] + 0 * TILE_SIZE,
+                            walls[1] + 0 * TILE_SIZE,
+                            walls[0] + 1 * TILE_SIZE,
+                            walls[1] + 1 * TILE_SIZE,
+                        ]
+                    } else if b && l && !bl {
+                        [
+                            walls[0] + 2 * TILE_SIZE,
+                            walls[1] + 0 * TILE_SIZE,
+                            walls[0] + 3 * TILE_SIZE,
+                            walls[1] + 1 * TILE_SIZE,
+                        ]
+                    } else if !t && !l {
+                        [
+                            walls[0] + 3 * TILE_SIZE,
+                            walls[1] + 0 * TILE_SIZE,
+                            walls[0] + 4 * TILE_SIZE,
+                            walls[1] + 1 * TILE_SIZE,
+                        ]
+                    } else if !t && !r {
+                        [
+                            walls[0] + 4 * TILE_SIZE,
+                            walls[1] + 0 * TILE_SIZE,
+                            walls[0] + 5 * TILE_SIZE,
+                            walls[1] + 1 * TILE_SIZE,
+                        ]
+                    } else if !t {
+                        [
+                            walls[0] + 1 * TILE_SIZE,
+                            walls[1] + 2 * TILE_SIZE,
+                            walls[0] + 2 * TILE_SIZE,
+                            walls[1] + 3 * TILE_SIZE,
+                        ]
+                    } else if !b && !l {
+                        [
+                            walls[0] + 3 * TILE_SIZE,
+                            walls[1] + 1 * TILE_SIZE,
+                            walls[0] + 4 * TILE_SIZE,
+                            walls[1] + 2 * TILE_SIZE,
+                        ]
+                    } else if !b && !r {
+                        [
+                            walls[0] + 4 * TILE_SIZE,
+                            walls[1] + 1 * TILE_SIZE,
+                            walls[0] + 5 * TILE_SIZE,
+                            walls[1] + 2 * TILE_SIZE,
+                        ]
+                    } else if !b {
+                        [
+                            walls[0] + 1 * TILE_SIZE,
+                            walls[1] + 0 * TILE_SIZE,
+                            walls[0] + 2 * TILE_SIZE,
+                            walls[1] + 1 * TILE_SIZE,
+                        ]
+                    } else if !l {
+                        [
+                            walls[0] + 2 * TILE_SIZE,
+                            walls[1] + 1 * TILE_SIZE,
+                            walls[0] + 3 * TILE_SIZE,
+                            walls[1] + 2 * TILE_SIZE,
+                        ]
+                    } else if !r {
+                        [
+                            walls[0] + 0 * TILE_SIZE,
+                            walls[1] + 1 * TILE_SIZE,
+                            walls[0] + 1 * TILE_SIZE,
+                            walls[1] + 2 * TILE_SIZE,
+                        ]
+                    } else {
+                        [
+                            walls[0] + 1 * TILE_SIZE,
+                            walls[1] + 1 * TILE_SIZE,
+                            walls[0] + 2 * TILE_SIZE,
+                            walls[1] + 2 * TILE_SIZE,
+                        ]
+                    }
+                }
+                Some(c) => {
+                    panic!("unknown tile type {}", c);
+                }
+                None => {
+                    continue;
+                }
+            };
+
+            let y_tile = LEVEL_HEIGHT - 1 - y_tile;
             let tile_rect = Box2D::new(
                 point2(
                     x_tile as f32 * tile_size.width,
@@ -362,12 +522,12 @@ pub fn generate_ground(
                 ),
             );
             let uv_pos = point2(
-                image[0] as f32 / TEXTURE_ATLAS_SIZE.width as f32,
-                image[1] as f32 / TEXTURE_ATLAS_SIZE.height as f32,
+                tile[0] as f32 / TEXTURE_ATLAS_SIZE.width as f32,
+                tile[1] as f32 / TEXTURE_ATLAS_SIZE.height as f32,
             );
             let uv_size = size2(
-                (image[2] - image[0]) as f32 / TEXTURE_ATLAS_SIZE.width as f32,
-                (image[3] - image[1]) as f32 / TEXTURE_ATLAS_SIZE.height as f32,
+                (tile[2] - tile[0]) as f32 / TEXTURE_ATLAS_SIZE.width as f32,
+                (tile[3] - tile[1]) as f32 / TEXTURE_ATLAS_SIZE.height as f32,
             );
             let uv_rect = Rect::new(uv_pos, uv_size);
 
