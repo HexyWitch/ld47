@@ -38,6 +38,7 @@ pub fn run<
     let windowed_context = unsafe {
         glutin::ContextBuilder::new()
             .with_gl(glutin::GlRequest::Specific(glutin::Api::OpenGlEs, (2, 0)))
+            .with_vsync(true)
             .build_windowed(wb, &event_loop)
             .unwrap()
             .make_current()
@@ -62,6 +63,12 @@ pub fn run<
                 ..
             } => {
                 log::info!("Resize to {:?}", size);
+            }
+            event::Event::WindowEvent {
+                event: WindowEvent::CloseRequested,
+                ..
+            } => {
+                *control_flow = ControlFlow::Exit;
             }
             event::Event::WindowEvent { event, .. } => match event {
                 WindowEvent::KeyboardInput {
