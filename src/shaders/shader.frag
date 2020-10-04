@@ -6,5 +6,8 @@ uniform sampler2D u_texture;
 
 void main()
 {
-    gl_FragColor = texture2D(u_texture, v_uv) * v_color;
+    // multiply color by alpha for correct blending
+    highp vec4 color = texture2D(u_texture, v_uv) * v_color;
+    color.rgb *= color.a;
+    gl_FragColor = color;
 }

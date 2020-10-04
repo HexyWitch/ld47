@@ -29,6 +29,7 @@ pub struct Game {
     buttons: HashMap<Point2D<i32>, Button>,
     doors: HashMap<Point2D<i32>, Door>,
     teleporters: HashMap<Point2D<i32>, Teleporter>,
+    bulbs: Vec<Bulb>,
 }
 
 impl Game {
@@ -174,6 +175,18 @@ impl Game {
                     &mut texture,
                 )
                 .unwrap(),
+                bulb: load_image(
+                    include_bytes!("../assets/bulb.png"),
+                    &mut atlas,
+                    &mut texture,
+                )
+                .unwrap(),
+                bulb_shadow: load_image(
+                    include_bytes!("../assets/bulb_shadow.png"),
+                    &mut atlas,
+                    &mut texture,
+                )
+                .unwrap(),
             }
         };
 
@@ -214,11 +227,21 @@ impl Game {
             );
         }
 
+        let mut bulbs = Vec::new();
+        for position in level.bulbs.iter() {
+            bulbs.push(Bulb::new(
+                images.bulb,
+                images.bulb_shadow,
+                position.to_f32() + vec2(0.5, 0.5),
+            ));
+        }
+
         let players = vec![Ghost::new(
             images.ghost,
             images.ghost_shadow,
             level.player_start,
         )];
+
         Self {
             program,
             ground_buffer,
@@ -234,6 +257,7 @@ impl Game {
             buttons,
             doors,
             teleporters,
+            bulbs,
         }
     }
 
@@ -296,6 +320,10 @@ impl Game {
                     self.images.ghost_shadow,
                     self.level.player_start,
                 ));
+
+                for bulb in self.bulbs.iter_mut() {
+                    bulb.reset();
+                }
             }
         } else {
             self.players
@@ -335,6 +363,9 @@ impl Game {
         for teleporter in self.teleporters.values_mut() {
             teleporter.update();
         }
+        for bulb in self.bulbs.iter_mut() {
+            bulb.update(self.tick, &players_spatial, &self.players);
+        }
     }
 
     pub fn draw(&mut self, context: &mut gl::Context) {
@@ -360,6 +391,10 @@ impl Game {
             player.draw(self.tick, &mut vertices);
         }
 
+        for bulb in self.bulbs.iter() {
+            bulb.draw(self.tick, &mut vertices);
+        }
+
         unsafe {
             self.vertex_buffer.write(&vertices);
 
@@ -380,6 +415,8 @@ struct Images {
     door_v: TextureRect,
     button: TextureRect,
     teleporter: TextureRect,
+    bulb: TextureRect,
+    bulb_shadow: TextureRect,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -476,6 +513,9 @@ impl Ghost {
                     self.positions
                         .push(*self.positions.last().expect("position vec is empty"));
                 }
+            } else {
+                self.positions
+                    .push(*self.positions.last().expect("position vec is empty"));
             }
         }
 
@@ -640,6 +680,105 @@ impl Teleporter {
             &self.sprite,
             if self.active_timer > 0. { 1 } else { 0 },
             self.position.to_f32(),
+            out,
+        );
+    }
+}
+
+struct Bulb {
+    sprite: Sprite,
+    shadow: Sprite,
+    positions: Vec<Point2D<f32>>,
+    bob_timer: f32,
+    picked_up: Option<(usize, usize)>,
+}
+
+impl Bulb {
+    pub fn new(image: TextureRect, shadow: TextureRect, position: Point2D<f32>) -> Self {
+        let mut sprite = Sprite::new(image, 2, point2(4., -2.));
+        let mut shadow = Sprite::new(shadow, 1, point2(2., 1.5));
+        let transform = Transform2D::create_scale(1. / TILE_SIZE as f32, 1. / TILE_SIZE as f32);
+        sprite.set_transform(transform);
+        shadow.set_transform(transform);
+        Self {
+            sprite,
+            shadow,
+            positions: vec![position],
+            bob_timer: 0.,
+            picked_up: None,
+        }
+    }
+
+    pub fn position(&self, tick: usize) -> Point2D<f32> {
+        *self
+            .positions
+            .get(tick + 1)
+            .unwrap_or(self.positions.last().expect("positions vec is empty"))
+    }
+
+    pub fn update(
+        &mut self,
+        tick: usize,
+        players_spatial: &HashMap<Point2D<i32>, Vec<usize>>,
+        players: &Vec<Ghost>,
+    ) {
+        if let Some((_, pickup_player)) = self.picked_up {
+            self.positions.push(players[pickup_player].position(tick));
+
+            let transform = Transform2D::create_translation(1., 5.)
+                .post_scale(1. / TILE_SIZE as f32, 1. / TILE_SIZE as f32);
+            self.sprite.set_transform(transform);
+        } else {
+            self.positions.push(self.position(tick));
+
+            self.bob_timer = (self.bob_timer + TICK_DT) % 1.0;
+            let height = ((self.bob_timer * 6.28).sin() + 1.) * 2.;
+            let transform = Transform2D::create_translation(0., height)
+                .post_scale(1. / TILE_SIZE as f32, 1. / TILE_SIZE as f32);
+            self.sprite.set_transform(transform);
+
+            let tile_pos = point2(
+                self.position(tick).x.floor() as i32,
+                self.position(tick).y.floor() as i32,
+            );
+            let mut near_players = Vec::new();
+            for x in -1..1 {
+                for y in -1..1 {
+                    if let Some(ids) = players_spatial.get(&(tile_pos + vec2(x, y))) {
+                        near_players.extend_from_slice(ids);
+                    }
+                }
+            }
+
+            near_players.sort_by(|a, b| {
+                (self.position(tick) - players[*a].position(tick))
+                    .length()
+                    .partial_cmp(&(self.position(tick) - players[*b].position(tick)).length())
+                    .unwrap_or(std::cmp::Ordering::Less)
+            });
+            if let Some(pickup_player) = near_players.first() {
+                if (self.position(tick) - players[*pickup_player].position(tick)).length() < 0.5 {
+                    self.picked_up = Some((tick, *pickup_player));
+                }
+            }
+        }
+    }
+
+    pub fn reset(&mut self) {
+        let pos = *self.positions.first().unwrap();
+        self.positions = vec![pos];
+        self.picked_up = None;
+    }
+
+    pub fn draw(&self, tick: usize, out: &mut Vec<Vertex>) {
+        let picked_up = self.picked_up.map(|(t, _)| t <= tick).unwrap_or(false);
+        if picked_up {
+            render_sprite(&self.shadow, 0, self.position(tick).to_f32(), out);
+        }
+        render_sprite(
+            &self.sprite,
+            if picked_up { 1 } else { 0 },
+            self.position(tick).to_f32(),
             out,
         );
     }

@@ -56,13 +56,7 @@ impl Sprite {
     }
 
     pub fn set_color(&mut self, color: [f32; 4]) {
-        // premultiply the color by the alpha to make blending work properly
-        self.color = [
-            color[0] * color[3],
-            color[1] * color[3],
-            color[2] * color[3],
-            color[3],
-        ];
+        self.color = color;
     }
 
     pub fn transform(&self) -> &Transform2D<f32> {

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use euclid::{
     default::{Box2D, Point2D, Rect},
@@ -17,6 +17,7 @@ pub struct Level {
     pub buttons: HashMap<Point2D<i32>, ButtonTile>,
     pub doors: HashMap<Point2D<i32>, DoorTile>,
     pub teleporters: HashMap<Point2D<i32>, TeleporterTile>,
+    pub bulbs: HashSet<Point2D<i32>>,
 }
 
 impl Level {
@@ -46,7 +47,7 @@ pub const TILE_SIZE: u32 = 16;
 const LEVEL_HEIGHT: usize = 22;
 const LEVEL: [&'static str; LEVEL_HEIGHT] = [
     "########################################",
-    "#    ##B                               #",
+    "#    ##B       O                       #",
     "#    ##                                #",
     "#B    |      S BT                      #",
     "#######-#######                        #",
@@ -125,6 +126,7 @@ pub fn create_level() -> Level {
     let mut buttons = HashMap::new();
     let mut doors = HashMap::new();
     let mut teleporters = HashMap::new();
+    let mut bulbs = HashSet::new();
 
     for y_tile in 0..LEVEL_HEIGHT {
         let mut row = Vec::new();
@@ -154,6 +156,10 @@ pub fn create_level() -> Level {
                         point2(x_tile as i32, y_tile as i32),
                         TeleporterTile::default(),
                     );
+                    Tile::Floor
+                }
+                'O' => {
+                    bulbs.insert(point2(x_tile as i32, y_tile as i32));
                     Tile::Floor
                 }
                 c => panic!("unknown tile type {}", c),
@@ -235,6 +241,7 @@ pub fn create_level() -> Level {
         buttons,
         doors,
         teleporters,
+        bulbs,
     }
 }
 
