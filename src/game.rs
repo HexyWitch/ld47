@@ -25,6 +25,12 @@ pub struct Game {
     clear_players: bool,
     paused: bool,
 
+    ui: Sprite,
+    ui_bulb: Sprite,
+    ui_time_bar_bg: Sprite,
+    ui_time_bar: Sprite,
+    ui_vertex_buffer: gl::VertexBuffer,
+
     level: Level,
     controls: Controls,
 
@@ -93,25 +99,6 @@ impl Game {
                 })
                 .unwrap()
         };
-
-        let transform = Transform2D::create_scale(
-            1.0 / SCREEN_SIZE.width as f32,
-            1.0 / SCREEN_SIZE.height as f32,
-        )
-        .post_scale(2., 2.)
-        .post_scale(ZOOM_LEVEL, ZOOM_LEVEL)
-        .post_scale(TILE_SIZE as f32, TILE_SIZE as f32)
-        .post_translate(vec2(-1.0, -1.0));
-        program
-            .set_uniform(
-                0,
-                gl::Uniform::Mat3([
-                    [transform.m11, transform.m12, 0.0],
-                    [transform.m21, transform.m22, 0.0],
-                    [transform.m31, transform.m32, 1.0],
-                ]),
-            )
-            .unwrap();
 
         let mut texture = unsafe {
             gl_context
@@ -203,6 +190,26 @@ impl Game {
                     &mut texture,
                 )
                 .unwrap(),
+                ui: load_image(include_bytes!("../assets/ui.png"), &mut atlas, &mut texture)
+                    .unwrap(),
+                ui_bulb: load_image(
+                    include_bytes!("../assets/ui_bulb.png"),
+                    &mut atlas,
+                    &mut texture,
+                )
+                .unwrap(),
+                ui_time_bar: load_image(
+                    include_bytes!("../assets/ui_time_bar.png"),
+                    &mut atlas,
+                    &mut texture,
+                )
+                .unwrap(),
+                ui_time_bar_bg: load_image(
+                    include_bytes!("../assets/ui_time_bar_bg.png"),
+                    &mut atlas,
+                    &mut texture,
+                )
+                .unwrap(),
             }
         };
 
@@ -265,6 +272,13 @@ impl Game {
             level.the_machine.to_f32(),
         );
 
+        let ui = Sprite::new(images.ui, 1, point2(0., 0.));
+        let ui_bulb = Sprite::new(images.ui_bulb, 1, point2(0., 0.));
+        let ui_time_bar = Sprite::new(images.ui_time_bar, 1, point2(0., 0.));
+        let ui_time_bar_bg = Sprite::new(images.ui_time_bar_bg, 1, point2(0., 0.));
+
+        let ui_vertex_buffer = unsafe { gl_context.create_vertex_buffer() }.unwrap();
+
         Self {
             program,
             ground_buffer,
@@ -275,6 +289,12 @@ impl Game {
             rewind: false,
             clear_players: false,
             paused: true,
+
+            ui,
+            ui_bulb,
+            ui_time_bar,
+            ui_time_bar_bg,
+            ui_vertex_buffer,
 
             level,
             controls: Controls::default(),
@@ -326,9 +346,11 @@ impl Game {
                 }
                 InputEvent::KeyDown(Key::Space) => {
                     self.rewind = true;
+                    self.paused = true;
                 }
                 InputEvent::KeyDown(Key::R) => {
                     self.rewind = true;
+                    self.paused = true;
                     self.clear_players = true;
                 }
                 _ => {}
@@ -387,6 +409,7 @@ impl Game {
 
                 self.tick += 1;
                 if self.tick >= LOOP_TICKS {
+                    self.paused = true;
                     self.rewind = true;
                 }
             }
@@ -413,46 +436,28 @@ impl Game {
         for teleporter in self.teleporters.values_mut() {
             teleporter.update();
         }
-        for bulb in self.bulbs.iter_mut() {
-            bulb.update(
-                self.tick,
-                &players_spatial,
-                &self.players,
-                &self.the_machine,
-            );
-            if bulb.inserted {
-                self.the_machine.add_bulb();
-                self.rewind = true;
-                self.clear_players = true;
+
+        if !self.paused {
+            for bulb in self.bulbs.iter_mut() {
+                bulb.update(
+                    self.tick,
+                    &players_spatial,
+                    &self.players,
+                    &self.the_machine,
+                );
+                if bulb.inserted {
+                    self.the_machine.add_bulb();
+                    self.rewind = true;
+                    self.clear_players = true;
+                }
             }
+            self.bulbs.retain(|bulb| !bulb.inserted);
         }
-        self.bulbs.retain(|bulb| !bulb.inserted);
 
         self.the_machine.update();
     }
 
     pub fn draw(&mut self, context: &mut gl::Context) {
-        let camera_pos = self.players.last().unwrap().position(self.tick);
-        let transform = Transform2D::create_translation(-camera_pos.x, -camera_pos.y)
-            .post_scale(
-                1.0 / SCREEN_SIZE.width as f32,
-                1.0 / SCREEN_SIZE.height as f32,
-            )
-            .post_scale(ZOOM_LEVEL, ZOOM_LEVEL)
-            .post_scale(TILE_SIZE as f32, TILE_SIZE as f32)
-            .post_scale(2., 2.);
-
-        self.program
-            .set_uniform(
-                0,
-                gl::Uniform::Mat3([
-                    [transform.m11, transform.m12, 0.0],
-                    [transform.m21, transform.m22, 0.0],
-                    [transform.m31, transform.m32, 1.0],
-                ]),
-            )
-            .unwrap();
-
         let mut vertices = Vec::new();
 
         for button in self.buttons.values() {
@@ -480,13 +485,98 @@ impl Game {
             bulb.draw(self.tick, &mut vertices);
         }
 
+        // ui stuff
+        let mut ui_vertices = Vec::new();
+
+        render_sprite(&self.ui_time_bar_bg, 0, point2(244., 67.), &mut ui_vertices);
+
+        self.ui_time_bar
+            .set_transform(Transform2D::create_translation(
+                0.,
+                self.tick as f32 / LOOP_TICKS as f32 * -80.,
+            ));
+        render_sprite(&self.ui_time_bar, 0, point2(244., 67.), &mut ui_vertices);
+
+        render_sprite(&self.ui, 0, point2(0., 0.), &mut ui_vertices);
+        if self.the_machine.slots_occupied >= 1 {
+            render_sprite(&self.ui_bulb, 0, point2(207., 176.), &mut ui_vertices);
+        }
+        if self.the_machine.slots_occupied >= 2 {
+            render_sprite(&self.ui_bulb, 0, point2(207. + 20., 176.), &mut ui_vertices);
+        }
+        if self.the_machine.slots_occupied >= 3 {
+            render_sprite(&self.ui_bulb, 0, point2(207. + 39., 176.), &mut ui_vertices);
+        }
+        if self.the_machine.slots_occupied >= 4 {
+            render_sprite(&self.ui_bulb, 0, point2(207., 176. - 21.), &mut ui_vertices);
+        }
+        if self.the_machine.slots_occupied >= 5 {
+            render_sprite(
+                &self.ui_bulb,
+                0,
+                point2(207. + 20., 176. - 21.),
+                &mut ui_vertices,
+            );
+        }
+        if self.the_machine.slots_occupied >= 6 {
+            render_sprite(
+                &self.ui_bulb,
+                0,
+                point2(207. + 39., 176. - 21.),
+                &mut ui_vertices,
+            );
+        }
+
         unsafe {
             self.vertex_buffer.write(&vertices);
+            self.ui_vertex_buffer.write(&ui_vertices);
 
-            context.clear([0., 0., 0., 1.]);
+            context.clear([75. / 255., 58. / 255., 58. / 255., 1.]);
+
+            let camera_pos = self.players.last().unwrap().position(self.tick);
+            let transform = Transform2D::create_translation(-camera_pos.x - 2., -camera_pos.y - 1.)
+                .post_scale(
+                    1.0 / SCREEN_SIZE.width as f32,
+                    1.0 / SCREEN_SIZE.height as f32,
+                )
+                .post_scale(ZOOM_LEVEL, ZOOM_LEVEL)
+                .post_scale(TILE_SIZE as f32, TILE_SIZE as f32)
+                .post_scale(2., 2.);
+
+            self.program
+                .set_uniform(
+                    0,
+                    gl::Uniform::Mat3([
+                        [transform.m11, transform.m12, 0.0],
+                        [transform.m21, transform.m22, 0.0],
+                        [transform.m31, transform.m32, 1.0],
+                    ]),
+                )
+                .unwrap();
 
             self.program.render_vertices(&self.ground_buffer).unwrap();
             self.program.render_vertices(&self.vertex_buffer).unwrap();
+
+            let ui_transform = Transform2D::create_scale(
+                1.0 / SCREEN_SIZE.width as f32,
+                1.0 / SCREEN_SIZE.height as f32,
+            )
+            .post_scale(3., 3.)
+            .post_scale(2., 2.)
+            .post_translate(vec2(-1., -1.));
+            self.program
+                .set_uniform(
+                    0,
+                    gl::Uniform::Mat3([
+                        [ui_transform.m11, ui_transform.m12, 0.0],
+                        [ui_transform.m21, ui_transform.m22, 0.0],
+                        [ui_transform.m31, ui_transform.m32, 1.0],
+                    ]),
+                )
+                .unwrap();
+            self.program
+                .render_vertices(&self.ui_vertex_buffer)
+                .unwrap();
         }
     }
 }
@@ -504,6 +594,10 @@ struct Images {
     bulb_shadow: TextureRect,
     the_machine: TextureRect,
     the_machine_slots: TextureRect,
+    ui: TextureRect,
+    ui_bulb: TextureRect,
+    ui_time_bar: TextureRect,
+    ui_time_bar_bg: TextureRect,
 }
 
 #[derive(Default, Clone, Copy)]

@@ -7,4 +7,4 @@ pub const SCREEN_SIZE: Size2D<u32> = euclid::Size2D {
     height: 600,
     _unit: std::marker::PhantomData::<euclid::UnknownUnit>,
 };
-pub const ZOOM_LEVEL: f32 = 3.;
+pub const ZOOM_LEVEL: f32 = 2.;

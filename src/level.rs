@@ -48,7 +48,7 @@ pub const TILE_SIZE: u32 = 16;
 const LEVEL_HEIGHT: usize = 22;
 const LEVEL: [&'static str; LEVEL_HEIGHT] = [
     "########################################",
-    "#    ##B   M                           #",
+    "#    ##B   M  OOOOOO                    #",
     "#    ##                                #",
     "#B    |   S    T                       #",
     "#######-#######                        #",
