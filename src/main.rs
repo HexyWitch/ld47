@@ -31,9 +31,9 @@ fn main() {
                 // accumulate input over several frames
                 input_vec.extend_from_slice(inputs);
 
-                // jank ass fixed update loop
-                last_update += dt;
-                if last_update > TICK_DT {
+                // jank ass fixed update loop, skip max 5 frames
+                last_update = (last_update + dt).min(TICK_DT * 5.);
+                while last_update > TICK_DT {
                     game.update(&input_vec);
 
                     last_update -= TICK_DT;
