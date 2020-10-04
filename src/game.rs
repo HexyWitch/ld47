@@ -22,6 +22,9 @@ pub struct Game {
 
     tick: usize,
     rewind: bool,
+    clear_players: bool,
+    paused: bool,
+
     level: Level,
     controls: Controls,
 
@@ -270,6 +273,9 @@ impl Game {
 
             tick: 0,
             rewind: false,
+            clear_players: false,
+            paused: true,
+
             level,
             controls: Controls::default(),
 
@@ -318,8 +324,19 @@ impl Game {
                     )];
                     self.tick = 0;
                 }
+                InputEvent::KeyDown(Key::Space) => {
+                    self.rewind = true;
+                }
+                InputEvent::KeyDown(Key::R) => {
+                    self.rewind = true;
+                    self.clear_players = true;
+                }
                 _ => {}
             }
+        }
+
+        if self.controls.down || self.controls.up || self.controls.left || self.controls.right {
+            self.paused = false;
         }
 
         // only current player gets new inputs
@@ -329,37 +346,49 @@ impl Game {
             if self.tick == 0 {
                 self.rewind = false;
 
-                for player in self.players.iter_mut() {
-                    player.reset(self.level.player_start);
+                if self.clear_players {
+                    self.players = vec![Ghost::new(
+                        self.images.ghost,
+                        self.images.ghost_shadow,
+                        self.level.player_start,
+                    )];
+
+                    self.clear_players = false;
+                } else {
+                    for player in self.players.iter_mut() {
+                        player.reset(self.level.player_start);
+                    }
+                    self.players
+                        .last_mut()
+                        .unwrap()
+                        .set_color([1.0, 1.0, 1.0, 0.5]);
+                    self.players.push(Ghost::new(
+                        self.images.ghost,
+                        self.images.ghost_shadow,
+                        self.level.player_start,
+                    ));
                 }
-                self.players
-                    .last_mut()
-                    .unwrap()
-                    .set_color([1.0, 1.0, 1.0, 0.5]);
-                self.players.push(Ghost::new(
-                    self.images.ghost,
-                    self.images.ghost_shadow,
-                    self.level.player_start,
-                ));
 
                 for bulb in self.bulbs.iter_mut() {
                     bulb.reset();
                 }
             }
         } else {
-            self.players
-                .last_mut()
-                .unwrap()
-                .push_controls(self.controls);
+            if !self.paused {
+                self.players
+                    .last_mut()
+                    .unwrap()
+                    .push_controls(self.controls);
 
-            // all players are updated
-            for player in self.players.iter_mut() {
-                player.update(self.tick, &self.level, &self.doors);
-            }
+                // all players are updated
+                for player in self.players.iter_mut() {
+                    player.update(self.tick, &self.level, &self.doors);
+                }
 
-            self.tick += 1;
-            if self.tick >= LOOP_TICKS {
-                self.rewind = true;
+                self.tick += 1;
+                if self.tick >= LOOP_TICKS {
+                    self.rewind = true;
+                }
             }
         }
 
@@ -385,12 +414,45 @@ impl Game {
             teleporter.update();
         }
         for bulb in self.bulbs.iter_mut() {
-            bulb.update(self.tick, &players_spatial, &self.players);
+            bulb.update(
+                self.tick,
+                &players_spatial,
+                &self.players,
+                &self.the_machine,
+            );
+            if bulb.inserted {
+                self.the_machine.add_bulb();
+                self.rewind = true;
+                self.clear_players = true;
+            }
         }
+        self.bulbs.retain(|bulb| !bulb.inserted);
+
         self.the_machine.update();
     }
 
     pub fn draw(&mut self, context: &mut gl::Context) {
+        let camera_pos = self.players.last().unwrap().position(self.tick);
+        let transform = Transform2D::create_translation(-camera_pos.x, -camera_pos.y)
+            .post_scale(
+                1.0 / SCREEN_SIZE.width as f32,
+                1.0 / SCREEN_SIZE.height as f32,
+            )
+            .post_scale(ZOOM_LEVEL, ZOOM_LEVEL)
+            .post_scale(TILE_SIZE as f32, TILE_SIZE as f32)
+            .post_scale(2., 2.);
+
+        self.program
+            .set_uniform(
+                0,
+                gl::Uniform::Mat3([
+                    [transform.m11, transform.m12, 0.0],
+                    [transform.m21, transform.m22, 0.0],
+                    [transform.m31, transform.m32, 1.0],
+                ]),
+            )
+            .unwrap();
+
         let mut vertices = Vec::new();
 
         for button in self.buttons.values() {
@@ -716,6 +778,7 @@ struct Bulb {
     positions: Vec<Point2D<f32>>,
     bob_timer: f32,
     picked_up: Option<(usize, usize)>,
+    inserted: bool,
 }
 
 impl Bulb {
@@ -731,6 +794,7 @@ impl Bulb {
             positions: vec![position],
             bob_timer: 0.,
             picked_up: None,
+            inserted: false,
         }
     }
 
@@ -746,6 +810,7 @@ impl Bulb {
         tick: usize,
         players_spatial: &HashMap<Point2D<i32>, Vec<usize>>,
         players: &Vec<Ghost>,
+        the_machine: &TheMachine,
     ) {
         if let Some((_, pickup_player)) = self.picked_up {
             self.positions.push(players[pickup_player].position(tick));
@@ -753,6 +818,10 @@ impl Bulb {
             let transform = Transform2D::create_translation(1., 5.)
                 .post_scale(1. / TILE_SIZE as f32, 1. / TILE_SIZE as f32);
             self.sprite.set_transform(transform);
+
+            if (the_machine.position - self.position(tick)).length() < 1. {
+                self.inserted = true;
+            }
         } else {
             self.positions.push(self.position(tick));
 
@@ -827,7 +896,7 @@ impl TheMachine {
     ) -> Self {
         let mut sprite = Sprite::new(image, 3, point2(15., 0.));
         let mut slots = Sprite::new(slots, 6, point2(15., -17.));
-        let mut bulb = Sprite::new(bulb, 2, point2(4., -19.));
+        let mut bulb = Sprite::new(bulb, 2, point2(16., -18.));
         let transform = Transform2D::create_scale(1. / TILE_SIZE as f32, 1. / TILE_SIZE as f32);
         sprite.set_transform(transform);
         slots.set_transform(transform);
@@ -842,18 +911,38 @@ impl TheMachine {
         }
     }
 
+    pub fn add_bulb(&mut self) {
+        self.slots_occupied += 1;
+    }
+
     pub fn update(&mut self) {
         self.animation_timer = (self.animation_timer + TICK_DT) % 0.25;
     }
 
-    pub fn draw(&self, out: &mut Vec<Vertex>) {
+    pub fn draw(&mut self, out: &mut Vec<Vertex>) {
         let frame = ((self.animation_timer / 0.25) * 3.).floor() as usize;
         render_sprite(&self.sprite, frame, self.position.to_f32(), out);
+
+        if self.slots_occupied > 0 {
+            render_sprite(
+                &self.slots,
+                self.slots_occupied - 1,
+                self.position.to_f32(),
+                out,
+            );
+            for i in 0..self.slots_occupied {
+                self.bulb.set_transform(
+                    Transform2D::create_translation(5. * i as f32, 0.)
+                        .post_scale(1. / TILE_SIZE as f32, 1. / TILE_SIZE as f32),
+                );
+                render_sprite(&self.bulb, 1, self.position.to_f32(), out);
+            }
+        }
     }
 }
 
-// Time loops over 300 ticks, 5 seconds
-const LOOP_TICKS: usize = 300;
+// Time loops over 600 ticks, 10 seconds
+const LOOP_TICKS: usize = 600;
 
 const GHOST_SPEED: f32 = 5.;
 
