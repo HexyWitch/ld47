@@ -45,7 +45,7 @@ impl TextureAtlas {
                         break 'outer;
                     }
                 }
-                x = 0;
+                x = 1;
                 y = next_y;
             }
             coords

@@ -2,12 +2,26 @@
 
 <head>
     <meta charset="utf-8" />
-    <script src='./rust-game-bootstrap.js'></script>
+    <script src='./ld47.js'></script>
     <script>
         window.addEventListener("load", () => {
-            wasm_bindgen('./rust-game-bootstrap_bg.wasm').catch(console.error);
+            wasm_bindgen('./ld47_bg.wasm').catch(console.error);
         })
     </script>
 </head>
+
+<body>
+    <p>
+        You have a limited time to collect the next part for the Machine, when 12 seconds have passed time rewinds and
+        you have to start over. But don’t worry, your past self is still around to repeat your past actions.
+
+    </p>
+    <p>
+        Controls:<br>
+        WASD - move your time ghost<br>
+        Space - wait in place for the rest of the duration<br>
+        R - clear out existing ghosts. Does not reset The Machine.
+    </p>
+</body>
 
 </html>

@@ -55,10 +55,12 @@ impl Mixer {
             };
             for i in 0..requested_samples.min(remaining_samples) {
                 let instance_i = (instance.index + i) % instance.audio.buffer.len();
-                out[i] += ((instance.audio.buffer[instance_i] as f32 / i16::max_value() as f32)
-                    * instance.volume
-                    * i16::max_value() as f32)
-                    .floor() as i16;
+                out[i] = out[i].saturating_add(
+                    ((instance.audio.buffer[instance_i] as f32 / i16::max_value() as f32)
+                        * instance.volume
+                        * i16::max_value() as f32)
+                        .floor() as i16,
+                );
             }
             if requested_samples >= remaining_samples && !instance.do_loop {
                 finished.push(i);

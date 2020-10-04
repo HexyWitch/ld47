@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use euclid::{
     default::{Point2D, Transform2D, Vector2D},
@@ -11,6 +14,7 @@ use crate::{
     graphics::{load_image, render_sprite, Sprite, Vertex, TEXTURE_ATLAS_SIZE},
     input::{InputEvent, Key},
     level::{create_level, generate_tile_buffer, DoorTile, Level, Tile, TILE_SIZE},
+    mixer::{Audio, Mixer},
     texture_atlas::{TextureAtlas, TextureRect},
 };
 
@@ -18,7 +22,7 @@ pub struct Game {
     program: gl::Program,
     ground_buffer: gl::VertexBuffer,
     vertex_buffer: gl::VertexBuffer,
-    images: Images,
+    assets: Assets,
 
     tick: usize,
     rewind: bool,
@@ -29,6 +33,7 @@ pub struct Game {
     ui_bulb: Sprite,
     ui_time_bar_bg: Sprite,
     ui_time_bar: Sprite,
+    ui_win_screen: Sprite,
     ui_vertex_buffer: gl::VertexBuffer,
 
     level: Level,
@@ -40,10 +45,12 @@ pub struct Game {
     teleporters: HashMap<Point2D<i32>, Teleporter>,
     bulbs: Vec<Bulb>,
     the_machine: TheMachine,
+
+    mixer: Arc<Mixer>,
 }
 
 impl Game {
-    pub fn new(gl_context: &mut gl::Context) -> Self {
+    pub fn new(gl_context: &mut gl::Context, mixer: Arc<Mixer>) -> Self {
         let vertex_shader = unsafe {
             gl_context
                 .create_shader(gl::ShaderType::Vertex, include_str!("shaders/shader.vert"))
@@ -116,8 +123,8 @@ impl Game {
 
         let vertex_buffer = unsafe { gl_context.create_vertex_buffer().unwrap() };
 
-        let images = unsafe {
-            Images {
+        let assets = unsafe {
+            Assets {
                 ghost: load_image(
                     include_bytes!("../assets/player.png"),
                     &mut atlas,
@@ -210,17 +217,42 @@ impl Game {
                     &mut texture,
                 )
                 .unwrap(),
+                win_screen: load_image(
+                    include_bytes!("../assets/win_screen.png"),
+                    &mut atlas,
+                    &mut texture,
+                )
+                .unwrap(),
+
+                door_sound: mixer
+                    .load_ogg(include_bytes!("../assets/door.ogg"))
+                    .unwrap(),
+                drop_sound: mixer
+                    .load_ogg(include_bytes!("../assets/drop.ogg"))
+                    .unwrap(),
+                pickup_sound: mixer
+                    .load_ogg(include_bytes!("../assets/pickup.ogg"))
+                    .unwrap(),
+                rewind_sound: mixer
+                    .load_ogg(include_bytes!("../assets/rewind.ogg"))
+                    .unwrap(),
+                start_sound: mixer
+                    .load_ogg(include_bytes!("../assets/start.ogg"))
+                    .unwrap(),
+                teleport_sound: mixer
+                    .load_ogg(include_bytes!("../assets/teleport.ogg"))
+                    .unwrap(),
             }
         };
 
         let level = create_level();
-        let ground_buffer = generate_tile_buffer(&level, images.ground, images.walls, gl_context);
+        let ground_buffer = generate_tile_buffer(&level, assets.ground, assets.walls, gl_context);
 
         let mut buttons = HashMap::new();
         for (position, button_tile) in level.buttons.iter() {
             buttons.insert(
                 *position,
-                Button::new(images.button, *position, button_tile.connections.clone()),
+                Button::new(assets.button, *position, button_tile.connections.clone()),
             );
         }
 
@@ -230,8 +262,8 @@ impl Game {
                 *position,
                 Door::new(
                     match door_tile {
-                        &DoorTile::Horizontal => images.door_h,
-                        &DoorTile::Vertical => images.door_v,
+                        &DoorTile::Horizontal => assets.door_h,
+                        &DoorTile::Vertical => assets.door_v,
                     },
                     *position,
                 ),
@@ -243,7 +275,7 @@ impl Game {
             teleporters.insert(
                 *position,
                 Teleporter::new(
-                    images.teleporter,
+                    assets.teleporter,
                     *position,
                     teleporter_tile.connection.expect("unconnected teleporter"),
                 ),
@@ -253,29 +285,30 @@ impl Game {
         let mut bulbs = Vec::new();
         for position in level.bulbs.iter() {
             bulbs.push(Bulb::new(
-                images.bulb,
-                images.bulb_shadow,
+                assets.bulb,
+                assets.bulb_shadow,
                 position.to_f32() + vec2(0.5, 0.5),
             ));
         }
 
         let players = vec![Ghost::new(
-            images.ghost,
-            images.ghost_shadow,
+            assets.ghost,
+            assets.ghost_shadow,
             level.player_start,
         )];
 
         let the_machine = TheMachine::new(
-            images.the_machine,
-            images.the_machine_slots,
-            images.bulb,
+            assets.the_machine,
+            assets.the_machine_slots,
+            assets.bulb,
             level.the_machine.to_f32(),
         );
 
-        let ui = Sprite::new(images.ui, 1, point2(0., 0.));
-        let ui_bulb = Sprite::new(images.ui_bulb, 1, point2(0., 0.));
-        let ui_time_bar = Sprite::new(images.ui_time_bar, 1, point2(0., 0.));
-        let ui_time_bar_bg = Sprite::new(images.ui_time_bar_bg, 1, point2(0., 0.));
+        let ui = Sprite::new(assets.ui, 1, point2(0., 0.));
+        let ui_bulb = Sprite::new(assets.ui_bulb, 1, point2(0., 0.));
+        let ui_time_bar = Sprite::new(assets.ui_time_bar, 1, point2(0., 0.));
+        let ui_time_bar_bg = Sprite::new(assets.ui_time_bar_bg, 1, point2(0., 0.));
+        let ui_win_screen = Sprite::new(assets.win_screen, 1, point2(0., 0.));
 
         let ui_vertex_buffer = unsafe { gl_context.create_vertex_buffer() }.unwrap();
 
@@ -283,7 +316,7 @@ impl Game {
             program,
             ground_buffer,
             vertex_buffer,
-            images,
+            assets,
 
             tick: 0,
             rewind: false,
@@ -294,6 +327,7 @@ impl Game {
             ui_bulb,
             ui_time_bar,
             ui_time_bar_bg,
+            ui_win_screen,
             ui_vertex_buffer,
 
             level,
@@ -305,10 +339,16 @@ impl Game {
             teleporters,
             bulbs,
             the_machine,
+
+            mixer,
         }
     }
 
     pub fn update(&mut self, inputs: &[InputEvent]) {
+        if self.the_machine.slots_occupied == 6 && self.tick == 0 {
+            return;
+        }
+
         for input in inputs {
             match input {
                 InputEvent::KeyDown(Key::W) => {
@@ -338,17 +378,23 @@ impl Game {
                 InputEvent::KeyDown(Key::Escape) => {
                     self.rewind = false;
                     self.players = vec![Ghost::new(
-                        self.images.ghost,
-                        self.images.ghost_shadow,
+                        self.assets.ghost,
+                        self.assets.ghost_shadow,
                         self.level.player_start,
                     )];
                     self.tick = 0;
                 }
                 InputEvent::KeyDown(Key::Space) => {
+                    if !self.rewind {
+                        self.mixer.play(&self.assets.rewind_sound, 1.0, false);
+                    }
                     self.rewind = true;
                     self.paused = true;
                 }
                 InputEvent::KeyDown(Key::R) => {
+                    if !self.rewind {
+                        self.mixer.play(&self.assets.rewind_sound, 1.0, false);
+                    }
                     self.rewind = true;
                     self.paused = true;
                     self.clear_players = true;
@@ -366,8 +412,8 @@ impl Game {
 
                 if self.clear_players {
                     self.players = vec![Ghost::new(
-                        self.images.ghost,
-                        self.images.ghost_shadow,
+                        self.assets.ghost,
+                        self.assets.ghost_shadow,
                         self.level.player_start,
                     )];
 
@@ -381,8 +427,8 @@ impl Game {
                         .unwrap()
                         .set_color([1.0, 1.0, 1.0, 0.5]);
                     self.players.push(Ghost::new(
-                        self.images.ghost,
-                        self.images.ghost_shadow,
+                        self.assets.ghost,
+                        self.assets.ghost_shadow,
                         self.level.player_start,
                     ));
                 }
@@ -392,8 +438,15 @@ impl Game {
                 }
             }
         } else {
-            if self.controls.down || self.controls.up || self.controls.left || self.controls.right {
-                self.paused = false;
+            if self.paused {
+                if self.controls.down
+                    || self.controls.up
+                    || self.controls.left
+                    || self.controls.right
+                {
+                    self.paused = false;
+                    self.mixer.play(&self.assets.start_sound, 1.0, false);
+                }
             }
             if !self.paused {
                 self.players
@@ -408,6 +461,9 @@ impl Game {
 
                 self.tick += 1;
                 if self.tick >= LOOP_TICKS {
+                    if !self.rewind {
+                        self.mixer.play(&self.assets.rewind_sound, 1.0, false);
+                    }
                     self.rewind = true;
                     self.paused = true;
                 }
@@ -430,6 +486,8 @@ impl Game {
                 &mut self.players,
                 &mut self.doors,
                 &mut self.teleporters,
+                &self.mixer,
+                &self.assets,
             );
         }
         for teleporter in self.teleporters.values_mut() {
@@ -443,10 +501,13 @@ impl Game {
                 &players_spatial,
                 &self.players,
                 &self.the_machine,
+                &self.mixer,
+                &self.assets,
             );
             if bulb.inserted {
                 self.the_machine.add_bulb();
                 self.rewind = true;
+                self.mixer.play(&self.assets.drop_sound, 1.0, false);
                 self.paused = true;
                 self.clear_players = true;
             }
@@ -487,43 +548,47 @@ impl Game {
         // ui stuff
         let mut ui_vertices = Vec::new();
 
-        render_sprite(&self.ui_time_bar_bg, 0, point2(244., 67.), &mut ui_vertices);
+        if self.the_machine.slots_occupied == 6 && self.tick == 0 {
+            render_sprite(&self.ui_win_screen, 0, point2(0., 0.), &mut ui_vertices);
+        } else {
+            render_sprite(&self.ui_time_bar_bg, 0, point2(244., 67.), &mut ui_vertices);
 
-        self.ui_time_bar
-            .set_transform(Transform2D::create_translation(
-                0.,
-                self.tick as f32 / LOOP_TICKS as f32 * -80.,
-            ));
-        render_sprite(&self.ui_time_bar, 0, point2(244., 67.), &mut ui_vertices);
+            self.ui_time_bar
+                .set_transform(Transform2D::create_translation(
+                    0.,
+                    self.tick as f32 / LOOP_TICKS as f32 * -80.,
+                ));
+            render_sprite(&self.ui_time_bar, 0, point2(244., 67.), &mut ui_vertices);
 
-        render_sprite(&self.ui, 0, point2(0., 0.), &mut ui_vertices);
-        if self.the_machine.slots_occupied >= 1 {
-            render_sprite(&self.ui_bulb, 0, point2(207., 176.), &mut ui_vertices);
-        }
-        if self.the_machine.slots_occupied >= 2 {
-            render_sprite(&self.ui_bulb, 0, point2(207. + 20., 176.), &mut ui_vertices);
-        }
-        if self.the_machine.slots_occupied >= 3 {
-            render_sprite(&self.ui_bulb, 0, point2(207. + 39., 176.), &mut ui_vertices);
-        }
-        if self.the_machine.slots_occupied >= 4 {
-            render_sprite(&self.ui_bulb, 0, point2(207., 176. - 22.), &mut ui_vertices);
-        }
-        if self.the_machine.slots_occupied >= 5 {
-            render_sprite(
-                &self.ui_bulb,
-                0,
-                point2(207. + 20., 176. - 22.),
-                &mut ui_vertices,
-            );
-        }
-        if self.the_machine.slots_occupied >= 6 {
-            render_sprite(
-                &self.ui_bulb,
-                0,
-                point2(207. + 39., 176. - 22.),
-                &mut ui_vertices,
-            );
+            render_sprite(&self.ui, 0, point2(0., 0.), &mut ui_vertices);
+            if self.the_machine.slots_occupied >= 1 {
+                render_sprite(&self.ui_bulb, 0, point2(207., 176.), &mut ui_vertices);
+            }
+            if self.the_machine.slots_occupied >= 2 {
+                render_sprite(&self.ui_bulb, 0, point2(207. + 20., 176.), &mut ui_vertices);
+            }
+            if self.the_machine.slots_occupied >= 3 {
+                render_sprite(&self.ui_bulb, 0, point2(207. + 39., 176.), &mut ui_vertices);
+            }
+            if self.the_machine.slots_occupied >= 4 {
+                render_sprite(&self.ui_bulb, 0, point2(207., 176. - 22.), &mut ui_vertices);
+            }
+            if self.the_machine.slots_occupied >= 5 {
+                render_sprite(
+                    &self.ui_bulb,
+                    0,
+                    point2(207. + 20., 176. - 22.),
+                    &mut ui_vertices,
+                );
+            }
+            if self.the_machine.slots_occupied >= 6 {
+                render_sprite(
+                    &self.ui_bulb,
+                    0,
+                    point2(207. + 39., 176. - 22.),
+                    &mut ui_vertices,
+                );
+            }
         }
 
         unsafe {
@@ -532,7 +597,14 @@ impl Game {
 
             context.clear([75. / 255., 58. / 255., 58. / 255., 1.]);
 
-            let camera_pos = self.players.last().unwrap().position(self.tick);
+            let mut camera_pos = self.players.last().unwrap().position(self.tick);
+            // Fixes tile gaps but causes stuttery camera RIP
+            camera_pos.x = (camera_pos.x * ZOOM_LEVEL * TILE_SIZE as f32).floor()
+                / ZOOM_LEVEL
+                / TILE_SIZE as f32;
+            camera_pos.y = (camera_pos.y * ZOOM_LEVEL * TILE_SIZE as f32).floor()
+                / ZOOM_LEVEL
+                / TILE_SIZE as f32;
             let transform = Transform2D::create_translation(-camera_pos.x - 3., -camera_pos.y - 0.)
                 .post_scale(
                     1.0 / SCREEN_SIZE.width as f32,
@@ -580,7 +652,7 @@ impl Game {
     }
 }
 
-struct Images {
+struct Assets {
     ghost: TextureRect,
     ghost_shadow: TextureRect,
     ground: TextureRect,
@@ -597,6 +669,14 @@ struct Images {
     ui_bulb: TextureRect,
     ui_time_bar: TextureRect,
     ui_time_bar_bg: TextureRect,
+    win_screen: TextureRect,
+
+    door_sound: Audio,
+    drop_sound: Audio,
+    pickup_sound: Audio,
+    rewind_sound: Audio,
+    start_sound: Audio,
+    teleport_sound: Audio,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -713,10 +793,17 @@ impl Ghost {
     pub fn draw(&self, tick: usize, out: &mut Vec<Vertex>) {
         let frame = (self.animation_timer / GHOST_ANIMATION_TIME * GHOST_ANIMATION_FRAMES as f32)
             .floor() as usize;
-        let position = *self
+        let mut position = *self
             .positions
             .get(tick + 1)
             .unwrap_or(self.positions.last().expect("positions vec is empty"));
+
+        // fixes stuttery player caused by doing this same thing to the camera
+        // give me my programming diploma please
+        position.x =
+            (position.x * ZOOM_LEVEL * TILE_SIZE as f32).floor() / ZOOM_LEVEL / TILE_SIZE as f32;
+        position.y =
+            (position.y * ZOOM_LEVEL * TILE_SIZE as f32).floor() / ZOOM_LEVEL / TILE_SIZE as f32;
         render_sprite(&self.sprite, frame, position, out);
     }
 
@@ -751,16 +838,25 @@ impl Button {
         players: &mut Vec<Ghost>,
         doors: &mut HashMap<Point2D<i32>, Door>,
         teleporters: &mut HashMap<Point2D<i32>, Teleporter>,
+        mixer: &Mixer,
+        assets: &Assets,
     ) {
+        let mut changed_door = false;
         if players_spatial.contains_key(&self.position) {
             for connection in &self.connections {
                 if let Some(door) = doors.get_mut(connection) {
+                    if !door.open {
+                        changed_door = true;
+                    }
                     door.open = true;
                 }
 
                 // teleporters are edge triggered only
                 if !self.active {
                     if let Some(teleporter) = teleporters.get_mut(connection) {
+                        if teleporter.active_timer <= 0. {
+                            mixer.play(&assets.teleport_sound, 1.0, false);
+                        }
                         teleporter.activate(players_spatial, players);
                     }
                 }
@@ -770,9 +866,16 @@ impl Button {
             self.active = false;
             for connection in &self.connections {
                 if let Some(door) = doors.get_mut(connection) {
+                    if door.open {
+                        changed_door = true;
+                    }
                     door.open = false;
                 }
             }
+        }
+
+        if changed_door {
+            mixer.play(&assets.door_sound, 1.0, false)
         }
     }
 
@@ -907,6 +1010,8 @@ impl Bulb {
         players_spatial: &HashMap<Point2D<i32>, Vec<usize>>,
         players: &Vec<Ghost>,
         the_machine: &TheMachine,
+        mixer: &Mixer,
+        assets: &Assets,
     ) {
         let picked_up = self.picked_up.map(|(t, _)| t <= tick).unwrap_or(false);
         if !picked_up {
@@ -956,6 +1061,7 @@ impl Bulb {
             if let Some(pickup_player) = near_players.first() {
                 if (self.position(tick) - players[*pickup_player].position(tick)).length() < 0.5 {
                     self.picked_up = Some((tick, *pickup_player));
+                    mixer.play(&assets.pickup_sound, 1.0, false);
                 }
             }
         }
