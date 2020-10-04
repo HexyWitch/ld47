@@ -25,10 +25,10 @@ pub struct Game {
     level: Level,
     controls: Controls,
 
-    player: Ghost,
-    old_players: Vec<Ghost>,
+    players: Vec<Ghost>,
     buttons: HashMap<Point2D<i32>, Button>,
     doors: HashMap<Point2D<i32>, Door>,
+    teleporters: HashMap<Point2D<i32>, Teleporter>,
 }
 
 impl Game {
@@ -168,6 +168,12 @@ impl Game {
                     &mut texture,
                 )
                 .unwrap(),
+                teleporter: load_image(
+                    include_bytes!("../assets/teleporter.png"),
+                    &mut atlas,
+                    &mut texture,
+                )
+                .unwrap(),
             }
         };
 
@@ -178,11 +184,7 @@ impl Game {
         for (position, button_tile) in level.buttons.iter() {
             buttons.insert(
                 *position,
-                Button::new(
-                    images.button,
-                    *position,
-                    button_tile.connection.expect("unconnected button"),
-                ),
+                Button::new(images.button, *position, button_tile.connections.clone()),
             );
         }
 
@@ -200,7 +202,23 @@ impl Game {
             );
         }
 
-        let player = Ghost::new(images.ghost, images.ghost_shadow, level.player_start);
+        let mut teleporters = HashMap::new();
+        for (position, teleporter_tile) in level.teleporters.iter() {
+            teleporters.insert(
+                *position,
+                Teleporter::new(
+                    images.teleporter,
+                    *position,
+                    teleporter_tile.connection.expect("unconnected teleporter"),
+                ),
+            );
+        }
+
+        let players = vec![Ghost::new(
+            images.ghost,
+            images.ghost_shadow,
+            level.player_start,
+        )];
         Self {
             program,
             ground_buffer,
@@ -212,10 +230,10 @@ impl Game {
             level,
             controls: Controls::default(),
 
-            player,
-            old_players: Vec::new(),
+            players,
             buttons,
             doors,
+            teleporters,
         }
     }
 
@@ -246,6 +264,15 @@ impl Game {
                 InputEvent::KeyUp(Key::D) => {
                     self.controls.right = false;
                 }
+                InputEvent::KeyDown(Key::Escape) => {
+                    self.rewind = false;
+                    self.players = vec![Ghost::new(
+                        self.images.ghost,
+                        self.images.ghost_shadow,
+                        self.level.player_start,
+                    )];
+                    self.tick = 0;
+                }
                 _ => {}
             }
         }
@@ -257,50 +284,56 @@ impl Game {
             if self.tick == 0 {
                 self.rewind = false;
 
-                // move current player into old players list, and create a new player
-                let mut old_player = std::mem::replace(
-                    &mut self.player,
-                    Ghost::new(
-                        self.images.ghost,
-                        self.images.ghost_shadow,
-                        self.level.player_start,
-                    ),
-                );
-                old_player.set_color([1.0, 1.0, 1.0, 0.5]);
-                self.old_players.push(old_player);
-
-                for old_player in self.old_players.iter_mut() {
-                    old_player.reset(self.level.player_start);
+                for player in self.players.iter_mut() {
+                    player.reset(self.level.player_start);
                 }
-            }
-        } else {
-            self.player.push_controls(self.controls);
-
-            // all players are updated
-            self.player.update(self.tick, &self.level, &self.doors);
-            for old_player in self.old_players.iter_mut() {
-                old_player.update(self.tick, &self.level, &self.doors);
-            }
-
-            let mut players_spatial: HashSet<Point2D<i32>> = HashSet::new();
-            players_spatial.insert(point2(
-                self.player.position(self.tick).x.floor() as i32,
-                self.player.position(self.tick).y.floor() as i32,
-            ));
-            for old_player in self.old_players.iter() {
-                players_spatial.insert(point2(
-                    old_player.position(self.tick).x.floor() as i32,
-                    old_player.position(self.tick).y.floor() as i32,
+                self.players
+                    .last_mut()
+                    .unwrap()
+                    .set_color([1.0, 1.0, 1.0, 0.5]);
+                self.players.push(Ghost::new(
+                    self.images.ghost,
+                    self.images.ghost_shadow,
+                    self.level.player_start,
                 ));
             }
-            for button in self.buttons.values_mut() {
-                button.update(&players_spatial, &mut self.doors);
+        } else {
+            self.players
+                .last_mut()
+                .unwrap()
+                .push_controls(self.controls);
+
+            // all players are updated
+            for player in self.players.iter_mut() {
+                player.update(self.tick, &self.level, &self.doors);
             }
 
             self.tick += 1;
             if self.tick >= LOOP_TICKS {
                 self.rewind = true;
             }
+        }
+
+        let mut players_spatial: HashMap<Point2D<i32>, Vec<usize>> = HashMap::new();
+        for (index, player) in self.players.iter().enumerate() {
+            players_spatial
+                .entry(point2(
+                    player.position(self.tick).x.floor() as i32,
+                    player.position(self.tick).y.floor() as i32,
+                ))
+                .or_insert(Vec::new())
+                .push(index);
+        }
+        for button in self.buttons.values_mut() {
+            button.update(
+                &players_spatial,
+                &mut self.players,
+                &mut self.doors,
+                &mut self.teleporters,
+            );
+        }
+        for teleporter in self.teleporters.values_mut() {
+            teleporter.update();
         }
     }
 
@@ -313,18 +346,19 @@ impl Game {
         for door in self.doors.values() {
             door.draw(&mut vertices);
         }
+        for teleporter in self.teleporters.values() {
+            teleporter.draw(&mut vertices);
+        }
 
         // draw all shadows first
-        for old_player in self.old_players.iter() {
-            old_player.draw_shadow(self.tick, &mut vertices);
+        for player in self.players.iter() {
+            player.draw_shadow(self.tick, &mut vertices);
         }
-        self.player.draw_shadow(self.tick, &mut vertices);
 
         // then players
-        for old_player in self.old_players.iter() {
-            old_player.draw(self.tick, &mut vertices);
+        for player in self.players.iter() {
+            player.draw(self.tick, &mut vertices);
         }
-        self.player.draw(self.tick, &mut vertices);
 
         unsafe {
             self.vertex_buffer.write(&vertices);
@@ -345,6 +379,7 @@ struct Images {
     door_h: TextureRect,
     door_v: TextureRect,
     button: TextureRect,
+    teleporter: TextureRect,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -379,6 +414,10 @@ impl Ghost {
             positions: vec![position],
             animation_timer: 0.,
         }
+    }
+
+    pub fn teleport(&mut self, destination: Point2D<f32>) {
+        *self.positions.last_mut().unwrap() = destination;
     }
 
     pub fn reset(&mut self, position: Point2D<f32>) {
@@ -469,34 +508,51 @@ impl Ghost {
 struct Button {
     sprite: Sprite,
     position: Point2D<i32>,
-    connection: Point2D<i32>,
+    connections: Vec<Point2D<i32>>,
     active: bool,
 }
 
 impl Button {
-    pub fn new(image: TextureRect, position: Point2D<i32>, connection: Point2D<i32>) -> Self {
+    pub fn new(image: TextureRect, position: Point2D<i32>, connections: Vec<Point2D<i32>>) -> Self {
         let mut sprite = Sprite::new(image, 2, point2(0., 0.));
         let transform = Transform2D::create_scale(1. / TILE_SIZE as f32, 1. / TILE_SIZE as f32);
         sprite.set_transform(transform);
         Self {
             sprite,
             position,
-            connection,
+            connections,
             active: false,
         }
     }
 
     pub fn update(
         &mut self,
-        players_spatial: &HashSet<Point2D<i32>>,
+        players_spatial: &HashMap<Point2D<i32>, Vec<usize>>,
+        players: &mut Vec<Ghost>,
         doors: &mut HashMap<Point2D<i32>, Door>,
+        teleporters: &mut HashMap<Point2D<i32>, Teleporter>,
     ) {
-        if players_spatial.contains(&self.position) {
+        if players_spatial.contains_key(&self.position) {
+            for connection in &self.connections {
+                if let Some(door) = doors.get_mut(connection) {
+                    door.open = true;
+                }
+
+                // teleporters are edge triggered only
+                if !self.active {
+                    if let Some(teleporter) = teleporters.get_mut(connection) {
+                        teleporter.activate(players_spatial, players);
+                    }
+                }
+            }
             self.active = true;
-            doors.get_mut(&self.connection).unwrap().open = true;
         } else {
             self.active = false;
-            doors.get_mut(&self.connection).unwrap().open = false;
+            for connection in &self.connections {
+                if let Some(door) = doors.get_mut(connection) {
+                    door.open = false;
+                }
+            }
         }
     }
 
@@ -536,6 +592,53 @@ impl Door {
         render_sprite(
             &self.sprite,
             if self.open { 1 } else { 0 },
+            self.position.to_f32(),
+            out,
+        );
+    }
+}
+
+struct Teleporter {
+    sprite: Sprite,
+    position: Point2D<i32>,
+    destination: Point2D<i32>,
+    active_timer: f32,
+}
+
+impl Teleporter {
+    pub fn new(image: TextureRect, position: Point2D<i32>, destination: Point2D<i32>) -> Self {
+        let mut sprite = Sprite::new(image, 2, point2(0., 0.));
+        let transform = Transform2D::create_scale(1. / TILE_SIZE as f32, 1. / TILE_SIZE as f32);
+        sprite.set_transform(transform);
+        Self {
+            sprite,
+            position,
+            destination,
+            active_timer: 0.,
+        }
+    }
+
+    pub fn update(&mut self) {
+        self.active_timer = (self.active_timer - TICK_DT).max(0.);
+    }
+
+    pub fn activate(
+        &mut self,
+        players_spatial: &HashMap<Point2D<i32>, Vec<usize>>,
+        players: &mut Vec<Ghost>,
+    ) {
+        self.active_timer = 0.5;
+        if let Some(teleport_entities) = players_spatial.get(&self.position) {
+            for i in teleport_entities {
+                players[*i].teleport(self.destination.to_f32() + vec2(0.5, 0.5));
+            }
+        }
+    }
+
+    pub fn draw(&self, out: &mut Vec<Vertex>) {
+        render_sprite(
+            &self.sprite,
+            if self.active_timer > 0. { 1 } else { 0 },
             self.position.to_f32(),
             out,
         );

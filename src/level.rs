@@ -11,6 +11,36 @@ use crate::{
     texture_atlas::TextureRect,
 };
 
+pub struct Level {
+    pub tiles: Vec<Vec<Tile>>,
+    pub player_start: Point2D<f32>,
+    pub buttons: HashMap<Point2D<i32>, ButtonTile>,
+    pub doors: HashMap<Point2D<i32>, DoorTile>,
+    pub teleporters: HashMap<Point2D<i32>, TeleporterTile>,
+}
+
+impl Level {
+    pub fn tile(&self, x: i32, y: i32) -> Tile {
+        if x > 0 && y > 0 {
+            *self
+                .tiles
+                .get(y as usize)
+                .and_then(|row| row.get(x as usize))
+                .unwrap_or(&Tile::Wall)
+        } else {
+            Tile::Wall
+        }
+    }
+
+    fn height(&self) -> usize {
+        self.tiles.len()
+    }
+
+    fn width(&self, y: usize) -> usize {
+        self.tiles.get(y).map(|row| row.len()).unwrap_or(0)
+    }
+}
+
 pub const TILE_SIZE: u32 = 16;
 
 const LEVEL_HEIGHT: usize = 22;
@@ -18,11 +48,61 @@ const LEVEL: [&'static str; LEVEL_HEIGHT] = [
     "########################################",
     "#    ##B                               #",
     "#    ##                                #",
-    "#B    |      S                         #",
+    "#B    |      S BT                      #",
     "#######-#######                        #",
     "####### #######                        #",
-    "#######      ##                        #",
-    "#######      ##                        #",
+    "##   ##      ##                        #",
+    "##  T##      ##                        #",
+    "###############                        #",
+    "###############                        #",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "########################################",
+];
+
+const BUTTON_CONNECTIONS: [&'static str; LEVEL_HEIGHT] = [
+    "########################################",
+    "#    ##A                               #",
+    "#    ##                                #",
+    "#B    A        CC                      #",
+    "#######B#######                        #",
+    "####### #######                        #",
+    "##   ##      ##                        #",
+    "##  C##      ##                        #",
+    "###############                        #",
+    "###############                        #",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "#                                      #",
+    "########################################",
+];
+
+const TELEPORTER_CONNECTIONS: [&'static str; LEVEL_HEIGHT] = [
+    "########################################",
+    "#    ##                                #",
+    "#    ##                                #",
+    "#               A                      #",
+    "####### #######                        #",
+    "####### #######                        #",
+    "##   ##      ##                        #",
+    "##  A##      ##                        #",
     "###############                        #",
     "###############                        #",
     "#                                      #",
@@ -44,6 +124,7 @@ pub fn create_level() -> Level {
     let mut player_start = point2(0., 0.);
     let mut buttons = HashMap::new();
     let mut doors = HashMap::new();
+    let mut teleporters = HashMap::new();
 
     for y_tile in 0..LEVEL_HEIGHT {
         let mut row = Vec::new();
@@ -68,27 +149,92 @@ pub fn create_level() -> Level {
                     doors.insert(point2(x_tile as i32, y_tile as i32), DoorTile::Horizontal);
                     Tile::Floor
                 }
+                'T' => {
+                    teleporters.insert(
+                        point2(x_tile as i32, y_tile as i32),
+                        TeleporterTile::default(),
+                    );
+                    Tile::Floor
+                }
                 c => panic!("unknown tile type {}", c),
             })
         }
         tiles.push(row);
     }
 
-    buttons
-        .get_mut(&point2(7, 20))
-        .expect("button not found")
-        .connection = Some(point2(6, 18));
+    let mut button_connections = HashMap::new();
+    for y_tile in 0..LEVEL_HEIGHT {
+        for (x_tile, c) in BUTTON_CONNECTIONS[LEVEL_HEIGHT - 1 - y_tile]
+            .chars()
+            .enumerate()
+        {
+            match c {
+                '#' | ' ' => {}
+                c => {
+                    button_connections
+                        .entry(c)
+                        .or_insert_with(|| Vec::new())
+                        .push(point2(x_tile as i32, y_tile as i32));
+                }
+            }
+        }
+    }
 
-    buttons
-        .get_mut(&point2(1, 18))
-        .expect("button not found")
-        .connection = Some(point2(7, 17));
+    for connections in button_connections.values() {
+        if let Some(button_index) = connections.iter().enumerate().find_map(|(index, point)| {
+            if buttons.get(point).is_some() {
+                Some(index)
+            } else {
+                None
+            }
+        }) {
+            let button = buttons.get_mut(&connections[button_index]).unwrap();
+            for (i, point) in connections.iter().enumerate() {
+                if i != button_index {
+                    button.connections.push(*point);
+                }
+            }
+        }
+    }
+
+    let mut teleporter_connections = HashMap::new();
+    for y_tile in 0..LEVEL_HEIGHT {
+        for (x_tile, c) in TELEPORTER_CONNECTIONS[LEVEL_HEIGHT - 1 - y_tile]
+            .chars()
+            .enumerate()
+        {
+            match c {
+                '#' | ' ' => {}
+                c => {
+                    teleporter_connections
+                        .entry(c)
+                        .or_insert_with(|| Vec::new())
+                        .push(point2(x_tile as i32, y_tile as i32));
+                }
+            }
+        }
+    }
+    for connections in teleporter_connections.values() {
+        if connections.len() == 2 {
+            teleporters
+                .get_mut(&connections[0])
+                .expect("no teleporter found at connection point")
+                .connection = Some(connections[1]);
+            teleporters
+                .get_mut(&connections[1])
+                .expect("no teleporter found at connection point")
+                .connection = Some(connections[0]);
+        } else {
+            panic!("Teleporter is connected in more than 2 places")
+        }
+    }
 
     Level {
         tiles,
         player_start,
         buttons,
         doors,
+        teleporters,
     }
 }
 
@@ -100,7 +246,7 @@ pub enum Tile {
 
 #[derive(Default)]
 pub struct ButtonTile {
-    pub connection: Option<Point2D<i32>>,
+    pub connections: Vec<Point2D<i32>>,
 }
 
 pub enum DoorTile {
@@ -108,33 +254,9 @@ pub enum DoorTile {
     Vertical,
 }
 
-pub struct Level {
-    pub tiles: Vec<Vec<Tile>>,
-    pub player_start: Point2D<f32>,
-    pub buttons: HashMap<Point2D<i32>, ButtonTile>,
-    pub doors: HashMap<Point2D<i32>, DoorTile>,
-}
-
-impl Level {
-    pub fn tile(&self, x: i32, y: i32) -> Tile {
-        if x > 0 && y > 0 {
-            *self
-                .tiles
-                .get(y as usize)
-                .and_then(|row| row.get(x as usize))
-                .unwrap_or(&Tile::Wall)
-        } else {
-            Tile::Wall
-        }
-    }
-
-    fn height(&self) -> usize {
-        self.tiles.len()
-    }
-
-    fn width(&self, y: usize) -> usize {
-        self.tiles.get(y).map(|row| row.len()).unwrap_or(0)
-    }
+#[derive(Default)]
+pub struct TeleporterTile {
+    pub connection: Option<Point2D<i32>>,
 }
 
 pub fn generate_tile_buffer(
