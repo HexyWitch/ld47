@@ -30,6 +30,7 @@ pub struct Game {
     doors: HashMap<Point2D<i32>, Door>,
     teleporters: HashMap<Point2D<i32>, Teleporter>,
     bulbs: Vec<Bulb>,
+    the_machine: TheMachine,
 }
 
 impl Game {
@@ -187,6 +188,18 @@ impl Game {
                     &mut texture,
                 )
                 .unwrap(),
+                the_machine: load_image(
+                    include_bytes!("../assets/the_machine.png"),
+                    &mut atlas,
+                    &mut texture,
+                )
+                .unwrap(),
+                the_machine_slots: load_image(
+                    include_bytes!("../assets/the_machine_slots.png"),
+                    &mut atlas,
+                    &mut texture,
+                )
+                .unwrap(),
             }
         };
 
@@ -242,6 +255,13 @@ impl Game {
             level.player_start,
         )];
 
+        let the_machine = TheMachine::new(
+            images.the_machine,
+            images.the_machine_slots,
+            images.bulb,
+            level.the_machine.to_f32(),
+        );
+
         Self {
             program,
             ground_buffer,
@@ -258,6 +278,7 @@ impl Game {
             doors,
             teleporters,
             bulbs,
+            the_machine,
         }
     }
 
@@ -366,6 +387,7 @@ impl Game {
         for bulb in self.bulbs.iter_mut() {
             bulb.update(self.tick, &players_spatial, &self.players);
         }
+        self.the_machine.update();
     }
 
     pub fn draw(&mut self, context: &mut gl::Context) {
@@ -380,6 +402,7 @@ impl Game {
         for teleporter in self.teleporters.values() {
             teleporter.draw(&mut vertices);
         }
+        self.the_machine.draw(&mut vertices);
 
         // draw all shadows first
         for player in self.players.iter() {
@@ -417,6 +440,8 @@ struct Images {
     teleporter: TextureRect,
     bulb: TextureRect,
     bulb_shadow: TextureRect,
+    the_machine: TextureRect,
+    the_machine_slots: TextureRect,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -781,6 +806,49 @@ impl Bulb {
             self.position(tick).to_f32(),
             out,
         );
+    }
+}
+
+struct TheMachine {
+    sprite: Sprite,
+    slots: Sprite,
+    bulb: Sprite,
+    animation_timer: f32,
+    position: Point2D<f32>,
+    slots_occupied: usize,
+}
+
+impl TheMachine {
+    pub fn new(
+        image: TextureRect,
+        slots: TextureRect,
+        bulb: TextureRect,
+        position: Point2D<f32>,
+    ) -> Self {
+        let mut sprite = Sprite::new(image, 3, point2(15., 0.));
+        let mut slots = Sprite::new(slots, 6, point2(15., -17.));
+        let mut bulb = Sprite::new(bulb, 2, point2(4., -19.));
+        let transform = Transform2D::create_scale(1. / TILE_SIZE as f32, 1. / TILE_SIZE as f32);
+        sprite.set_transform(transform);
+        slots.set_transform(transform);
+        bulb.set_transform(transform);
+        Self {
+            sprite,
+            slots,
+            bulb,
+            animation_timer: 0.,
+            position,
+            slots_occupied: 0,
+        }
+    }
+
+    pub fn update(&mut self) {
+        self.animation_timer = (self.animation_timer + TICK_DT) % 0.25;
+    }
+
+    pub fn draw(&self, out: &mut Vec<Vertex>) {
+        let frame = ((self.animation_timer / 0.25) * 3.).floor() as usize;
+        render_sprite(&self.sprite, frame, self.position.to_f32(), out);
     }
 }
 

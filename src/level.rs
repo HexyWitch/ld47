@@ -18,6 +18,7 @@ pub struct Level {
     pub doors: HashMap<Point2D<i32>, DoorTile>,
     pub teleporters: HashMap<Point2D<i32>, TeleporterTile>,
     pub bulbs: HashSet<Point2D<i32>>,
+    pub the_machine: Point2D<i32>,
 }
 
 impl Level {
@@ -47,7 +48,7 @@ pub const TILE_SIZE: u32 = 16;
 const LEVEL_HEIGHT: usize = 22;
 const LEVEL: [&'static str; LEVEL_HEIGHT] = [
     "########################################",
-    "#    ##B       O                       #",
+    "#    ##B       O   M                   #",
     "#    ##                                #",
     "#B    |      S BT                      #",
     "#######-#######                        #",
@@ -127,6 +128,7 @@ pub fn create_level() -> Level {
     let mut doors = HashMap::new();
     let mut teleporters = HashMap::new();
     let mut bulbs = HashSet::new();
+    let mut the_machine = None;
 
     for y_tile in 0..LEVEL_HEIGHT {
         let mut row = Vec::new();
@@ -160,6 +162,10 @@ pub fn create_level() -> Level {
                 }
                 'O' => {
                     bulbs.insert(point2(x_tile as i32, y_tile as i32));
+                    Tile::Floor
+                }
+                'M' => {
+                    the_machine = Some(point2(x_tile as i32, y_tile as i32));
                     Tile::Floor
                 }
                 c => panic!("unknown tile type {}", c),
@@ -242,6 +248,7 @@ pub fn create_level() -> Level {
         doors,
         teleporters,
         bulbs,
+        the_machine: the_machine.expect("No TheMachine found"),
     }
 }
 
