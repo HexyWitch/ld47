@@ -357,10 +357,6 @@ impl Game {
             }
         }
 
-        if self.controls.down || self.controls.up || self.controls.left || self.controls.right {
-            self.paused = false;
-        }
-
         // only current player gets new inputs
         if self.rewind {
             self.tick = self.tick.saturating_sub(5);
@@ -396,6 +392,9 @@ impl Game {
                 }
             }
         } else {
+            if self.controls.down || self.controls.up || self.controls.left || self.controls.right {
+                self.paused = false;
+            }
             if !self.paused {
                 self.players
                     .last_mut()
@@ -409,8 +408,8 @@ impl Game {
 
                 self.tick += 1;
                 if self.tick >= LOOP_TICKS {
-                    self.paused = true;
                     self.rewind = true;
+                    self.paused = true;
                 }
             }
         }
@@ -437,22 +436,22 @@ impl Game {
             teleporter.update();
         }
 
-        if !self.paused {
-            for bulb in self.bulbs.iter_mut() {
-                bulb.update(
-                    self.tick,
-                    &players_spatial,
-                    &self.players,
-                    &self.the_machine,
-                );
-                if bulb.inserted {
-                    self.the_machine.add_bulb();
-                    self.rewind = true;
-                    self.clear_players = true;
-                }
+        for bulb in self.bulbs.iter_mut() {
+            bulb.update(
+                self.tick,
+                self.paused,
+                &players_spatial,
+                &self.players,
+                &self.the_machine,
+            );
+            if bulb.inserted {
+                self.the_machine.add_bulb();
+                self.rewind = true;
+                self.paused = true;
+                self.clear_players = true;
             }
-            self.bulbs.retain(|bulb| !bulb.inserted);
         }
+        self.bulbs.retain(|bulb| !bulb.inserted);
 
         self.the_machine.update();
     }
@@ -508,13 +507,13 @@ impl Game {
             render_sprite(&self.ui_bulb, 0, point2(207. + 39., 176.), &mut ui_vertices);
         }
         if self.the_machine.slots_occupied >= 4 {
-            render_sprite(&self.ui_bulb, 0, point2(207., 176. - 21.), &mut ui_vertices);
+            render_sprite(&self.ui_bulb, 0, point2(207., 176. - 22.), &mut ui_vertices);
         }
         if self.the_machine.slots_occupied >= 5 {
             render_sprite(
                 &self.ui_bulb,
                 0,
-                point2(207. + 20., 176. - 21.),
+                point2(207. + 20., 176. - 22.),
                 &mut ui_vertices,
             );
         }
@@ -522,7 +521,7 @@ impl Game {
             render_sprite(
                 &self.ui_bulb,
                 0,
-                point2(207. + 39., 176. - 21.),
+                point2(207. + 39., 176. - 22.),
                 &mut ui_vertices,
             );
         }
@@ -534,7 +533,7 @@ impl Game {
             context.clear([75. / 255., 58. / 255., 58. / 255., 1.]);
 
             let camera_pos = self.players.last().unwrap().position(self.tick);
-            let transform = Transform2D::create_translation(-camera_pos.x - 2., -camera_pos.y - 1.)
+            let transform = Transform2D::create_translation(-camera_pos.x - 3., -camera_pos.y - 0.)
                 .post_scale(
                     1.0 / SCREEN_SIZE.width as f32,
                     1.0 / SCREEN_SIZE.height as f32,
@@ -848,10 +847,12 @@ impl Teleporter {
         players_spatial: &HashMap<Point2D<i32>, Vec<usize>>,
         players: &mut Vec<Ghost>,
     ) {
-        self.active_timer = 0.5;
-        if let Some(teleport_entities) = players_spatial.get(&self.position) {
-            for i in teleport_entities {
-                players[*i].teleport(self.destination.to_f32() + vec2(0.5, 0.5));
+        if self.active_timer <= 0. {
+            self.active_timer = 0.5;
+            if let Some(teleport_entities) = players_spatial.get(&self.position) {
+                for i in teleport_entities {
+                    players[*i].teleport(self.destination.to_f32() + vec2(0.5, 0.5));
+                }
             }
         }
     }
@@ -902,10 +903,24 @@ impl Bulb {
     pub fn update(
         &mut self,
         tick: usize,
+        paused: bool,
         players_spatial: &HashMap<Point2D<i32>, Vec<usize>>,
         players: &Vec<Ghost>,
         the_machine: &TheMachine,
     ) {
+        let picked_up = self.picked_up.map(|(t, _)| t <= tick).unwrap_or(false);
+        if !picked_up {
+            self.bob_timer = (self.bob_timer + TICK_DT) % 1.0;
+            let height = ((self.bob_timer * 6.28).sin() + 1.) * 2.;
+            let transform = Transform2D::create_translation(0., height)
+                .post_scale(1. / TILE_SIZE as f32, 1. / TILE_SIZE as f32);
+            self.sprite.set_transform(transform);
+        }
+
+        if paused {
+            return;
+        }
+
         if let Some((_, pickup_player)) = self.picked_up {
             self.positions.push(players[pickup_player].position(tick));
 
@@ -918,12 +933,6 @@ impl Bulb {
             }
         } else {
             self.positions.push(self.position(tick));
-
-            self.bob_timer = (self.bob_timer + TICK_DT) % 1.0;
-            let height = ((self.bob_timer * 6.28).sin() + 1.) * 2.;
-            let transform = Transform2D::create_translation(0., height)
-                .post_scale(1. / TILE_SIZE as f32, 1. / TILE_SIZE as f32);
-            self.sprite.set_transform(transform);
 
             let tile_pos = point2(
                 self.position(tick).x.floor() as i32,
@@ -960,7 +969,7 @@ impl Bulb {
 
     pub fn draw(&self, tick: usize, out: &mut Vec<Vertex>) {
         let picked_up = self.picked_up.map(|(t, _)| t <= tick).unwrap_or(false);
-        if picked_up {
+        if !picked_up {
             render_sprite(&self.shadow, 0, self.position(tick).to_f32(), out);
         }
         render_sprite(
@@ -1035,8 +1044,8 @@ impl TheMachine {
     }
 }
 
-// Time loops over 600 ticks, 10 seconds
-const LOOP_TICKS: usize = 600;
+// Time loops over 720 ticks, 12 seconds
+const LOOP_TICKS: usize = 720;
 
 const GHOST_SPEED: f32 = 5.;
 
