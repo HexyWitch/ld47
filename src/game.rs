@@ -386,14 +386,14 @@ impl Game {
                 }
                 InputEvent::KeyDown(Key::Space) => {
                     if !self.rewind {
-                        self.mixer.play(&self.assets.rewind_sound, 1.0, false);
+                        self.mixer.play(&self.assets.rewind_sound, 0.25, false);
                     }
                     self.rewind = true;
                     self.paused = true;
                 }
                 InputEvent::KeyDown(Key::R) => {
                     if !self.rewind {
-                        self.mixer.play(&self.assets.rewind_sound, 1.0, false);
+                        self.mixer.play(&self.assets.rewind_sound, 0.25, false);
                     }
                     self.rewind = true;
                     self.paused = true;
@@ -445,7 +445,7 @@ impl Game {
                     || self.controls.right
                 {
                     self.paused = false;
-                    self.mixer.play(&self.assets.start_sound, 1.0, false);
+                    self.mixer.play(&self.assets.start_sound, 0.25, false);
                 }
             }
             if !self.paused {
@@ -462,7 +462,7 @@ impl Game {
                 self.tick += 1;
                 if self.tick >= LOOP_TICKS {
                     if !self.rewind {
-                        self.mixer.play(&self.assets.rewind_sound, 1.0, false);
+                        self.mixer.play(&self.assets.rewind_sound, 0.25, false);
                     }
                     self.rewind = true;
                     self.paused = true;
@@ -507,7 +507,7 @@ impl Game {
             if bulb.inserted {
                 self.the_machine.add_bulb();
                 self.rewind = true;
-                self.mixer.play(&self.assets.drop_sound, 1.0, false);
+                self.mixer.play(&self.assets.drop_sound, 0.25, false);
                 self.paused = true;
                 self.clear_players = true;
             }
@@ -855,7 +855,7 @@ impl Button {
                 if !self.active {
                     if let Some(teleporter) = teleporters.get_mut(connection) {
                         if teleporter.active_timer <= 0. {
-                            mixer.play(&assets.teleport_sound, 1.0, false);
+                            mixer.play(&assets.teleport_sound, 0.25, false);
                         }
                         teleporter.activate(players_spatial, players);
                     }
@@ -875,7 +875,7 @@ impl Button {
         }
 
         if changed_door {
-            mixer.play(&assets.door_sound, 1.0, false)
+            mixer.play(&assets.door_sound, 0.25, false)
         }
     }
 
@@ -1061,7 +1061,7 @@ impl Bulb {
             if let Some(pickup_player) = near_players.first() {
                 if (self.position(tick) - players[*pickup_player].position(tick)).length() < 0.5 {
                     self.picked_up = Some((tick, *pickup_player));
-                    mixer.play(&assets.pickup_sound, 1.0, false);
+                    mixer.play(&assets.pickup_sound, 0.25, false);
                 }
             }
         }
